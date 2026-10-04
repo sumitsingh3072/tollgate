@@ -99,7 +99,25 @@ Done when: stats reflect requests just made; no DB call on the request path.
 Done when: create key -> chat in Playground -> see it in Logs and Overview,
 in both light and dark themes.
 
-## Phase 6: Hardening and ship
+## Phase 6: Accounts (Clerk) and landing page
+- [ ] Public landing page at / (hero, features, OpenAI SDK snippet, CTA); dashboard
+      moves under /dashboard/* via route groups ((marketing) and (app))
+- [ ] Clerk (@clerk/nextjs): sign-in / sign-up pages, UserButton in the header,
+      proxy.ts protects /dashboard/*; GitHub + Google OAuth and email enabled in Clerk
+- [ ] Backend ownership: api_keys.owner_id (Clerk user id) with an idempotent
+      ADD COLUMN IF NOT EXISTS at startup (no Alembic); keys, stats and logs scoped
+      to the owner
+- [ ] Trust model: dashboard server calls /admin with ADMIN_TOKEN + X-Tollgate-User
+      (from Clerk auth()); the gateway requires the header for user-scoped routes,
+      ADMIN_TOKEN alone keeps a full operator view
+- [ ] Abuse/cost guards (shared GEMINI_API_KEY): max keys per user, max rpm and
+      daily quota per key for self-serve users (env-configurable)
+- [ ] Tests: ownership isolation (user A cannot see/revoke user B's keys or logs)
+Done when: two different sign-ins each create keys and only see their own keys,
+logs and stats; signed-out visitors see the landing page and get redirected from
+/dashboard.
+
+## Phase 7: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
 - [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table
@@ -107,3 +125,4 @@ in both light and dark themes.
 Done when: a stranger can run it from the README in under 10 minutes.
 
 Cut order if late: command menu -> circuit breaker -> terse mode -> Overview charts.
+Phase 6 is optional for a single-team deployment (ADMIN_TOKEN-only mode keeps working).
