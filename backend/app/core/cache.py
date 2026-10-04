@@ -10,16 +10,24 @@ Layers:
 4. Bounded memory: entries live in a separate Redis (allkeys-lfu, maxmemory) so cache pressure can
    never evict rate-limit counters or quotas.
 5. Scope: private (default) keys include the API key id, so tenants never share entries.
+   Shared scope (opt-in per route, for public content) pools entries across keys, with a per-key
+   insert budget so one tenant cannot flood the pool, and hides cache headers from callers.
 6. TTL per route (default 24h).
+
+Streamed responses are rebuilt into one completion and cached like any other; a hit is replayed as
+JSON or as a fast SSE stream, whichever the caller asked for.
 """
 
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from redis.asyncio import Redis
+
+from app.core.usage import SSEUsageTracker
 
 CacheStatus = Literal["hit", "miss", "admission_rejected", "ineligible", "bypass"]
 Scope = Literal["private", "shared"]
@@ -37,6 +45,8 @@ class CachePolicy:
     ttl_seconds: int = 86_400
     # Cache temperature > 0 too (callers then get the same "random" answer); off by default.
     cache_nondeterministic: bool = False
+    # Shared scope only: new entries a single key may add per minute.
+    insert_budget_per_min: int = 30
 
 
 @dataclass(frozen=True)
@@ -114,3 +124,54 @@ async def admit(redis_cache: Redis, key: str, seen_ttl: int) -> bool:
 
 async def put(redis_cache: Redis, key: str, encoded: str, ttl: int) -> None:
     await redis_cache.set(key, encoded, ex=ttl)
+
+
+async def within_insert_budget(redis_state: Redis, key_id: str, budget: int) -> bool:
+    """Shared scope: count this insert against the key's per-minute budget (state Redis)."""
+    bucket = f"cache_inserts:{key_id}:{int(time.time()) // 60}"
+    async with redis_state.pipeline(transaction=False) as pipe:
+        pipe.incr(bucket)
+        pipe.expire(bucket, 61)
+        count, _ = await pipe.execute()
+    return count <= budget
+
+
+def completion_from_stream(tracker: SSEUsageTracker, model: str) -> dict[str, Any] | None:
+    """Rebuild a streamed answer as one chat.completion, or None if it can't be cached."""
+    if tracker.tool_calls or tracker.finish_reason is None:
+        return None
+    body: dict[str, Any] = {
+        "id": tracker.meta.get("id", "chatcmpl-tollgate"),
+        "object": "chat.completion",
+        "created": tracker.meta.get("created", int(time.time())),
+        "model": tracker.meta.get("model", model),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": tracker.content},
+                "finish_reason": tracker.finish_reason,
+            }
+        ],
+    }
+    if tracker.raw_usage:
+        body["usage"] = tracker.raw_usage
+    return body
+
+
+def render_sse(body: dict[str, Any]) -> list[bytes]:
+    """Replay a cached completion as an OpenAI-style stream (content, finish, usage, [DONE])."""
+    base = {
+        "id": body.get("id", "chatcmpl-tollgate"),
+        "object": "chat.completion.chunk",
+        "created": body.get("created", 0),
+        "model": body.get("model", ""),
+    }
+    choice = body["choices"][0]
+    content = (choice.get("message") or {}).get("content") or ""
+    events: list[dict[str, Any]] = [
+        {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}]},
+        {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": choice.get("finish_reason")}]},
+    ]
+    if body.get("usage"):
+        events.append({**base, "choices": [], "usage": body["usage"]})
+    return [f"data: {json.dumps(e, separators=(',', ':'))}\n\n".encode() for e in events] + [b"data: [DONE]\n\n"]

@@ -96,16 +96,24 @@ async def _handle(
         record.cache_status = "ineligible"
 
     ctx = _Context(state, key, record, alias, client_body, prompt, limit, key_for_cache)
-    if body.stream:
-        if key_for_cache:
-            record.cache_status = "bypass"  # streamed responses are not cached yet
-        return await _stream(ctx)
-
     if key_for_cache and (hit := await cache.get(state.redis_cache, key_for_cache)):
         # Hits cost no upstream tokens, so they count against neither the quota nor usage stats.
         record.status, record.model_used, record.cache_hit, record.cache_status = 200, hit.model, True, "hit"
-        return JSONResponse(hit.body, headers={**limit.headers(), **_tollgate_headers(hit.model, "hit", False)})
-    return await _complete(ctx)
+        headers = ctx.hide_if_shared({**limit.headers(), **_tollgate_headers(hit.model, "hit", False)})
+        if body.stream:
+            replay = cache.render_sse(hit.body)
+            record.mark_first_token()
+
+            async def chunks() -> AsyncIterator[bytes]:
+                try:
+                    for chunk in replay:
+                        yield chunk
+                finally:
+                    _finish(state.log_queue, record)  # streams log when they end
+
+            return StreamingResponse(chunks(), media_type="text/event-stream", headers={**SSE_HEADERS, **headers})
+        return JSONResponse(hit.body, headers=headers)
+    return await (_stream(ctx) if body.stream else _complete(ctx))
 
 
 @dataclass(frozen=True)
@@ -127,12 +135,21 @@ class _Context:
 
     def headers(self, flight: Flight, role: Role) -> dict[str, str]:
         waited = 0 if role == "follower" else flight.queue_wait_ms or 0
-        return {
-            **self.limit.headers(),
-            **_tollgate_headers(flight.model or "", self.record.cache_status or "bypass", flight.fallback_used),
-            "x-tollgate-coalesce": role,
-            "x-tollgate-queue-wait-ms": str(waited),
-        }
+        return self.hide_if_shared(
+            {
+                **self.limit.headers(),
+                **_tollgate_headers(flight.model or "", self.record.cache_status or "bypass", flight.fallback_used),
+                "x-tollgate-coalesce": role,
+                "x-tollgate-queue-wait-ms": str(waited),
+            }
+        )
+
+    def hide_if_shared(self, headers: dict[str, str]) -> dict[str, str]:
+        """In a shared cache pool these headers would tell a caller that someone else asked the same
+        thing. (Response timing can still leak it, which is why shared scope is opt-in.)"""
+        if self.alias.cache.scope != "shared":
+            return headers
+        return {k: v for k, v in headers.items() if k not in ("x-tollgate-cache", "x-tollgate-coalesce")}
 
     @property
     def key_id(self) -> str:
@@ -168,9 +185,7 @@ async def _complete(ctx: _Context) -> JSONResponse:
         result = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, call)
         flight.set_meta(result.upstream.model, result.fallback_used)
         if ctx.key_for_cache:
-            flight.cache_status = await _store(
-                state, ctx.key_for_cache, result.upstream.model, result.value, ctx.alias.cache, flight
-            )
+            flight.cache_status = await _store(ctx, result.upstream.model, result.value, flight)
         return result.value
 
     flight, role = state.coalescer.join(ctx.coalesce_key("json"), lead)
@@ -189,18 +204,22 @@ async def _complete(ctx: _Context) -> JSONResponse:
     return JSONResponse(value, headers=ctx.headers(flight, role))
 
 
-async def _store(
-    state: Any, key_for_cache: str, model: str, body: dict[str, Any], policy: cache.CachePolicy, flight: Flight
-) -> cache.CacheStatus:
+async def _store(ctx: _Context, model: str, body: dict[str, Any] | None, flight: Flight) -> cache.CacheStatus:
     """Cache a fresh response if it is complete, small enough and popular: seen before (second sight)
-    or already shared by two or more coalesced followers."""
+    or already shared by two or more coalesced followers. Shared scope also spends insert budget."""
+    state, policy, key_for_cache = ctx.state, ctx.alias.cache, ctx.key_for_cache
+    assert key_for_cache is not None
     settings = state.settings
-    encoded = cache.encode_if_eligible(model, body, settings.cache_max_entry_bytes)
+    encoded = cache.encode_if_eligible(model, body, settings.cache_max_entry_bytes) if body else None
     if encoded is None:
         return "ineligible"
     popular = flight.followers >= 2
     if not popular and not await cache.admit(state.redis_cache, key_for_cache, settings.cache_seen_ttl):
         return "admission_rejected"
+    if policy.scope == "shared" and not await cache.within_insert_budget(
+        state.redis, ctx.key_id, policy.insert_budget_per_min
+    ):
+        return "admission_rejected"  # served normally, just not added to the shared pool
     await cache.put(state.redis_cache, key_for_cache, encoded, policy.ttl_seconds)
     return "miss"
 
@@ -226,7 +245,7 @@ async def _stream(ctx: _Context) -> StreamingResponse:
         streamed = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, open_)
         chunks, ticket = streamed.value
         flight.set_meta(streamed.upstream.model, streamed.fallback_used)
-        meter = usage.SSEUsageTracker("")
+        meter = usage.SSEUsageTracker(ctx.prompt)
         try:  # the model slot is held until the stream ends
             async for chunk in chunks:
                 before = meter.content_chars
@@ -235,6 +254,10 @@ async def _stream(ctx: _Context) -> StreamingResponse:
                 await flight.emit(chunk)
         finally:
             queue.release(streamed.upstream.model, ticket)
+        if ctx.key_for_cache:
+            meter.result()  # flush a trailing partial line
+            body = cache.completion_from_stream(meter, streamed.upstream.model)
+            flight.cache_status = await _store(ctx, streamed.upstream.model, body, flight)
 
     flight, role = state.coalescer.join(ctx.coalesce_key("sse"), lead)
     try:
@@ -243,6 +266,8 @@ async def _stream(ctx: _Context) -> StreamingResponse:
         state.coalescer.leave(flight)
         raise
     _apply_flight(record, flight, role)
+    if ctx.key_for_cache:
+        record.cache_status = "miss"  # header value; the final status (stored or not) is logged at the end
     tracker = usage.SSEUsageTracker(ctx.prompt)
 
     async def body() -> AsyncIterator[bytes]:
@@ -255,6 +280,8 @@ async def _stream(ctx: _Context) -> StreamingResponse:
         finally:
             # Synchronous only: this also runs when the client disconnects (cancellation).
             state.coalescer.leave(flight)
+            if ctx.key_for_cache:
+                record.cache_status = "miss" if role == "follower" else (flight.cache_status or "miss")
             record.status, record.usage = 200, tracker.result()
             _finish(state.log_queue, record)
             tasks.spawn(limits.record_tokens(state.redis, ctx.key.id, record.usage.total_tokens), name="tokens")

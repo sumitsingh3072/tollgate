@@ -86,18 +86,82 @@ async def test_nondeterministic_requests_are_ineligible(client, auth, gemini, ex
     assert statuses == ["ineligible"] * 3
 
 
-async def test_stream_bypasses_cache(client, auth, gemini) -> None:
-    async def sse():
-        yield b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\ndata: [DONE]\n\n'
+def sse_body():
+    async def gen():
+        yield (
+            b'data: {"id":"c1","created":1,"model":"g",'
+            b'"choices":[{"delta":{"role":"assistant","content":"str"},"index":0}]}\n\n'
+        )
+        yield b'data: {"choices":[{"delta":{"content":"eamed"},"index":0,"finish_reason":"stop"}]}\n\n'
+        yield b'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}\n\n'
+        yield b"data: [DONE]\n\n"
 
-    gemini.mock(return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse()))
-    async with client.stream(
-        "POST",
-        "/v1/chat/completions",
-        json={"model": "fast", "messages": MESSAGES, "temperature": 0, "stream": True},
-        headers=auth,
-    ) as resp:
-        assert resp.headers["x-tollgate-cache"] == "bypass"
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=gen())
+
+
+async def stream_text(client, auth, model="fast") -> tuple[str, str]:
+    payload = {"model": model, "messages": MESSAGES, "temperature": 0, "stream": True}
+    async with client.stream("POST", "/v1/chat/completions", json=payload, headers=auth) as resp:
+        raw = b"".join([c async for c in resp.aiter_bytes()]).decode()
+    content = "".join(
+        json.loads(line[5:])["choices"][0]["delta"].get("content", "")
+        for line in raw.splitlines()
+        if line.startswith("data: {") and json.loads(line[5:])["choices"]
+    )
+    return resp.headers.get("x-tollgate-cache", ""), content
+
+
+async def test_streams_are_cached_and_replayed(client, auth, app, gemini) -> None:
+    gemini.mock(side_effect=lambda _: sse_body())
+
+    first = await stream_text(client, auth)  # first sighting: not stored
+    second = await stream_text(client, auth)  # stored
+    third = await stream_text(client, auth)  # replayed from cache as SSE
+
+    assert [first[1], second[1], third[1]] == ["streamed"] * 3
+    assert third[0] == "hit" and gemini.call_count == 2
+    # The same entry also answers a non-streaming request.
+    resp = await ask(client, auth)
+    assert resp.headers["x-tollgate-cache"] == "hit"
+    assert resp.json()["choices"][0]["message"]["content"] == "streamed"
+    await app.state.log_queue.flush()
+    statuses = [
+        i["cache_status"]
+        for i in (await client.get("/admin/logs", headers={"Authorization": "Bearer test-admin"})).json()["items"]
+    ]
+    assert statuses == ["hit", "hit", "miss", "admission_rejected"]
+
+
+async def test_shared_scope_pools_across_keys_and_hides_headers(client, auth, create_key, gemini) -> None:
+    gemini.mock(return_value=httpx.Response(200, json=completion("faq answer")))
+    other = await create_key(rpm=100)
+    for _ in range(2):
+        await ask(client, auth, model="faq")  # stored on second sight
+
+    resp = await ask(client, {"Authorization": f"Bearer {other['key']}"}, model="faq")
+
+    assert resp.json()["choices"][0]["message"]["content"] == "faq answer"
+    assert gemini.call_count == 2  # the other key was served from the shared pool
+    assert "x-tollgate-cache" not in resp.headers and "x-tollgate-coalesce" not in resp.headers
+
+
+async def test_shared_insert_budget(client, auth, gemini, redis: FakeAsyncRedis, app) -> None:
+    gemini.mock(return_value=httpx.Response(200, json=completion()))
+    app.state.aliases["faq"] = app.state.aliases["faq"].__class__(
+        chain=app.state.aliases["faq"].chain, cache=CachePolicy(scope="shared", insert_budget_per_min=1)
+    )
+
+    async def twice(prompt: str) -> None:
+        for _ in range(2):
+            await client.post(
+                "/v1/chat/completions",
+                json={"model": "faq", "messages": [{"role": "user", "content": prompt}], "temperature": 0},
+                headers=auth,
+            )
+
+    await twice("one")
+    await twice("two")  # over this key's budget of 1 new entry per minute: served, not stored
+    assert len(await redis.keys("cache:*")) == 1
 
 
 async def test_ttl_follows_route_policy(client, auth, gemini, redis: FakeAsyncRedis, settings: Settings) -> None:

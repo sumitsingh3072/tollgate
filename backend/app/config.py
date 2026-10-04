@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     cache_ttl: int = 86_400  # per-route default; stale answers expire even when popular
     cache_max_entry_bytes: int = 16_384
     cache_seen_ttl: int = 3_600  # second-sight admission window
+    cache_insert_budget_per_min: int = 30  # shared scope: new entries per key per minute
     # Identical in-flight requests share one upstream call (per process: run one worker).
     coalescing_enabled: bool = True
 
@@ -174,6 +175,10 @@ def build_aliases(settings: Settings) -> dict[str, Alias]:
     fast, smart = upstream_models(settings)
     smart_chain = (smart, fast)
     cache = CachePolicy(ttl_seconds=settings.cache_ttl)
+    # Opt-in shared pool for public content (FAQ bots): entries are reused across keys.
+    shared = CachePolicy(
+        scope="shared", ttl_seconds=settings.cache_ttl, insert_budget_per_min=settings.cache_insert_budget_per_min
+    )
     # Always-500 upstream first, so failover can be demoed on demand.
     mock = Upstream("mock-500", settings.mock_upstream_url)
     return {
@@ -181,6 +186,7 @@ def build_aliases(settings: Settings) -> dict[str, Alias]:
         "smart": Alias(chain=smart_chain, cache=cache),
         "smart-terse": Alias(chain=smart_chain, terse=True, cache=cache),
         "demo-failover": Alias(chain=(mock, fast), cache=cache),
+        "faq": Alias(chain=(fast,), cache=shared),
     }
 
 
