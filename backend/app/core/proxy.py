@@ -149,8 +149,9 @@ async def _relay(response: httpx.Response, alias: str, upstream: Upstream, start
         async for chunk in response.aiter_bytes():
             yield chunk
     except httpx.TransportError as exc:
-        # Headers are already sent; the best we can do is end the stream and log it.
+        # Headers are already sent: surface it so the gateway can tell the client and count the failure.
         log.warning("upstream stream broke", extra={"model": upstream.model, "error": repr(exc)})
+        raise GatewayError(502, "upstream_error", f"upstream {upstream.model}: stream interrupted") from exc
     finally:
         _log_call(alias, upstream, response.status_code, start, stream=True)
         await response.aclose()

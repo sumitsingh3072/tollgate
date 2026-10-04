@@ -96,10 +96,26 @@ def test_admin_token_read_from_file(tmp_path: Path) -> None:
     token_file = tmp_path / "admin_token"
     token_file.write_text("generated-secret\n")
     assert Settings(_env_file=None, admin_token_file=token_file).admin_token.get_secret_value() == "generated-secret"
-    # An explicit ADMIN_TOKEN beats the file; a missing file falls back to the default.
-    assert (
-        Settings(_env_file=None, admin_token="explicit", admin_token_file=token_file).admin_token.get_secret_value()
-        == "explicit"
-    )
-    missing = Settings(_env_file=None, admin_token_file=tmp_path / "nope")
-    assert missing.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN
+    explicit = Settings(_env_file=None, admin_token="explicit", admin_token_file=token_file)
+    assert explicit.admin_token.get_secret_value() == "explicit"  # an explicit token wins
+    # Empty or placeholder values mean "not set", exactly as in the dashboard.
+    for placeholder in ("", "  ", DEFAULT_ADMIN_TOKEN):
+        s = Settings(_env_file=None, admin_token=placeholder, admin_token_file=token_file)
+        assert s.admin_token.get_secret_value() == "generated-secret"
+
+
+def test_admin_token_file_must_be_readable(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="not readable"):
+        Settings(_env_file=None, admin_token_file=tmp_path / "nope")
+    empty = tmp_path / "empty"
+    empty.write_text("")
+    with pytest.raises(ValueError, match="empty"):
+        Settings(_env_file=None, admin_token_file=empty)
+
+
+def test_default_admin_token_refused_in_production() -> None:
+    from app.main import _check_admin_token
+
+    with pytest.raises(RuntimeError):
+        _check_admin_token(Settings(_env_file=None, environment="production"))
+    _check_admin_token(Settings(_env_file=None, environment="development"))  # only a warning

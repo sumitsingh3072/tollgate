@@ -38,7 +38,10 @@ services:
   redis:
     <<: *restart
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    # AOF on a volume: daily token usage and rate-limit counters survive restarts.
+    command: ["redis-server", "--save", "", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -140,13 +143,13 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       MOCK_UPSTREAM_URL: http://mock-upstream:9000/v1
       ADMIN_TOKEN_FILE: /run/tollgate/admin_token
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     volumes:
       - secrets:/run/tollgate:ro
     ports:
-      # Local by default. For remote access set BIND_ADDRESS=0.0.0.0 (and put TLS in front).
-      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+      # Local by default. GATEWAY_BIND_ADDRESS=0.0.0.0 lets other machines call the API (add TLS).
+      - "${GATEWAY_BIND_ADDRESS:-${BIND_ADDRESS:-127.0.0.1}}:${BACKEND_PORT:-8000}:8000"
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -175,16 +178,18 @@ services:
       ADMIN_TOKEN_FILE: /run/tollgate/admin_token
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      DASHBOARD_TRUSTED_HOSTS: ${DASHBOARD_TRUSTED_HOSTS:-}
     volumes:
       - secrets:/run/tollgate:ro
     ports:
-      # Without Clerk the dashboard has no sign-in: keep it on localhost unless accounts are enabled.
-      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+      # Without Clerk the dashboard has no sign-in and refuses non-localhost hosts anyway.
+      - "${DASHBOARD_BIND_ADDRESS:-${BIND_ADDRESS:-127.0.0.1}}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
 
 volumes:
   pgdata:
+  redisdata:
   ollama:
   secrets:

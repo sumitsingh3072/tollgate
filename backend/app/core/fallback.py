@@ -21,6 +21,7 @@ log = logging.getLogger("tollgate.fallback")
 class _BreakerState:
     failures: int = 0
     open_until: float = 0.0
+    trial_until: float = 0.0  # a half-open trial is in progress until then
 
 
 class CircuitBreakers:
@@ -34,22 +35,34 @@ class CircuitBreakers:
         return self._states.setdefault((upstream.base_url, upstream.model), _BreakerState())
 
     def allows(self, upstream: Upstream) -> bool:
-        return self._clock() >= self._state(upstream).open_until
+        """Closed: yes. Open: no. Half-open (window passed): exactly one trial at a time; a trial
+        that never reports back frees itself after another open window."""
+        state, now = self._state(upstream), self._clock()
+        if now < state.open_until:
+            return False
+        if state.failures < self._threshold:
+            return True
+        if now < state.trial_until:
+            return False
+        state.trial_until = now + self._open_seconds
+        return True
 
     def is_open(self, upstream: Upstream) -> bool:
-        return not self.allows(upstream)
+        """Read-only (unlike allows(), which hands out the half-open trial)."""
+        return self._clock() < self._state(upstream).open_until
 
     def record_success(self, upstream: Upstream) -> None:
         state = self._state(upstream)
         if state.failures >= self._threshold:
             log.info("circuit closed", extra={"model": upstream.model})
-        state.failures, state.open_until = 0, 0.0
+        state.failures, state.open_until, state.trial_until = 0, 0.0, 0.0
 
     def record_failure(self, upstream: Upstream) -> None:
         state = self._state(upstream)
         state.failures += 1
         if state.failures >= self._threshold:
             state.open_until = self._clock() + self._open_seconds
+            state.trial_until = 0.0
             log.warning(
                 "circuit open",
                 extra={"model": upstream.model, "failures": state.failures, "open_seconds": self._open_seconds},

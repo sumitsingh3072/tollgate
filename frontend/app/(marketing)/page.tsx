@@ -1,18 +1,22 @@
 import {
   ActivityIcon,
   ArrowRightIcon,
+  CombineIcon,
   DatabaseZapIcon,
   GaugeIcon,
   KeyRoundIcon,
   RadioIcon,
   RouteIcon,
+  ScaleIcon,
   ScissorsIcon,
+  SparklesIcon,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { CodeTabs } from "@/components/marketing/code-tabs";
+import { Pipeline } from "@/components/marketing/pipeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { GATEWAY_URL } from "@/lib/api";
@@ -64,9 +68,41 @@ const STEPS = [
 
 const NUMBERS = [
   { value: "~4 ms", label: "cache hit response" },
+  { value: "50 → 1", label: "model calls for 50 identical requests" },
+  { value: "8 s → 0.1 s", label: "light user's wait behind a heavy one" },
   { value: "1 line", label: "to switch: base_url" },
-  { value: "85%", label: "fewer output tokens with terse mode" },
-  { value: "0", label: "database calls on the request path" },
+];
+
+// Measured with backend/bench (see docs/benchmarks.md); nothing here is a projection.
+const UNIQUE = [
+  {
+    icon: SparklesIcon,
+    title: "A cache that doesn't bloat",
+    body: "Most prompts never repeat. Tollgate stores an answer only when it sees the same request a second time, evicts by frequency in its own memory-capped Redis, and keeps every key's cache private.",
+    stat: "7x fewer evictions",
+    statHint: "same hit rate, half the entries",
+  },
+  {
+    icon: CombineIcon,
+    title: "Request coalescing",
+    body: "When identical requests arrive together, one goes to the model and the rest share its answer, streamed live to everyone. A client disconnecting never cuts off the others.",
+    stat: "50 requests, 1 model call",
+    statHint: "0.56 s instead of 6.6 s",
+  },
+  {
+    icon: ScaleIcon,
+    title: "Fair queuing",
+    body: "Tollgate, not the model server, decides who goes next. A Virtual Token Counter serves the key that has received the least, so one script can't make everyone else wait.",
+    stat: "8.0 s → 0.1 s",
+    statHint: "light user's median wait under load",
+  },
+  {
+    icon: ActivityIcon,
+    title: "Proof, not promises",
+    body: "Prometheus metrics in OpenTelemetry GenAI naming, time to first token, cost tags per request, and dashboard pages for cache efficiency and fairness, with Jain's index.",
+    stat: "/metrics",
+    statHint: "plus Cache and Fairness pages",
+  },
 ];
 
 function Section({ id, eyebrow, title, children }: { id?: string; eyebrow: string; title: string; children: ReactNode }) {
@@ -145,6 +181,39 @@ export default function LandingPage() {
           ))}
         </dl>
       </section>
+
+      <Section id="unique" eyebrow="Built to protect a scarce model" title="Every token pays the toll">
+        <div className="space-y-8">
+          <p className="max-w-2xl text-muted-foreground">
+            Repeated work is avoided before it reaches the model, and the capacity that is left is shared
+            fairly. Cache hits never queue; coalesced requests never queue; only genuinely new work waits for
+            a model slot.
+          </p>
+          <Pipeline />
+          <div className="grid gap-4 md:grid-cols-2">
+            {UNIQUE.map(({ icon: Icon, title, body, stat, statHint }) => (
+              <div key={title} className="flex flex-col gap-4 rounded-xl border bg-card p-6">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-9 items-center justify-center rounded-lg border bg-background text-primary">
+                    <Icon className="size-4" />
+                  </span>
+                  <h3 className="font-medium">{title}</h3>
+                </div>
+                <p className="flex-1 text-muted-foreground">{body}</p>
+                <div className="border-t pt-4">
+                  <div className="text-xl font-semibold tracking-tight tabular-nums">{stat}</div>
+                  <div className="text-xs text-muted-foreground">{statHint}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Numbers measured with the benchmarks in <code className="font-mono">backend/bench</code> against a
+            simulated model; methodology and the full results, including what didn&apos;t help, are in
+            docs/benchmarks.md.
+          </p>
+        </div>
+      </Section>
 
       <Section id="features" eyebrow="Features" title="Everything between a request and a model, handled">
         <div className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 lg:grid-cols-4">

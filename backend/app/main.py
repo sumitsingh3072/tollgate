@@ -44,9 +44,16 @@ TOLLGATE_HEADERS = [
 ]
 
 
+def _check_admin_token(settings: Settings) -> None:
+    if settings.admin_token.get_secret_value() != DEFAULT_ADMIN_TOKEN:
+        return
+    if settings.environment == "production":
+        raise RuntimeError("ADMIN_TOKEN is the public default; set ADMIN_TOKEN or ADMIN_TOKEN_FILE")
+    log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
+
+
 def _warn_on_insecure_config(settings: Settings) -> None:
-    if settings.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN:
-        log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
+    _check_admin_token(settings)
     if settings.upstream_provider == "gemini" and not settings.gemini_api_key.get_secret_value():
         log.warning("GEMINI_API_KEY is not set; upstream calls will fail with 401")
 

@@ -90,13 +90,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _admin_token_from_file(self) -> "Settings":
-        if self.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN and self.admin_token_file:
+        explicit = self.admin_token.get_secret_value().strip()
+        # An empty or placeholder ADMIN_TOKEN means "not set" (same rule as the dashboard).
+        if explicit and explicit != DEFAULT_ADMIN_TOKEN:
+            return self
+        if self.admin_token_file:
             try:
                 token = self.admin_token_file.read_text().strip()
-            except OSError:
-                token = ""
-            if token:
-                self.admin_token = SecretStr(token)
+            except OSError as exc:
+                raise ValueError(f"ADMIN_TOKEN_FILE {self.admin_token_file} is not readable: {exc}") from exc
+            if not token:
+                raise ValueError(f"ADMIN_TOKEN_FILE {self.admin_token_file} is empty")
+            self.admin_token = SecretStr(token)
+        else:
+            self.admin_token = SecretStr(DEFAULT_ADMIN_TOKEN)
         return self
 
     @field_validator("gemini_base_url", "mock_upstream_url", "ollama_base_url")

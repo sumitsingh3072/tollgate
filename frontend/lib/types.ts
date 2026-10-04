@@ -119,14 +119,15 @@ export type CacheStats = {
   statuses: Record<string, number>;
   hit_rate: number;
   admission_rejected: number;
-  entries: number;
-  seen_markers: number;
-  used_memory_bytes: number;
-  max_memory_bytes: number;
-  eviction_policy: string;
-  evicted_keys: number;
+  // Instance-wide figures: null for signed-in users (operator view only).
+  entries: number | null;
+  seen_markers: number | null;
+  used_memory_bytes: number | null;
+  max_memory_bytes: number | null;
+  eviction_policy: string | null;
+  evicted_keys: number | null;
   hits_per_mb: number | null;
-  separate_instance: boolean;
+  separate_instance: boolean | null;
 };
 
 export type CoalesceStats = {

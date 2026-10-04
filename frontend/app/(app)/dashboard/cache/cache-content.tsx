@@ -29,19 +29,27 @@ export async function CacheContent({ hours }: { hours: number }) {
   const stats = await admin<CacheStats>(`/cache/stats?hours=${hours}`);
   const window = formatWindow(hours);
   const total = Object.values(stats.statuses).reduce((a, b) => a + b, 0);
-  const memoryKnown = stats.used_memory_bytes > 0;
+  const operator = stats.entries !== null; // instance-wide figures are hidden from signed-in users
+  const used = stats.used_memory_bytes ?? 0;
+  const limit = stats.max_memory_bytes ?? 0;
+  const memoryKnown = used > 0;
+  const n = (value: number | null) => (value === null ? "—" : formatNumber(value));
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Hit rate" value={formatPercent(stats.hit_rate)} hint={`of cacheable requests, ${window}`} />
-        <StatCard label="Entries stored" value={formatNumber(stats.entries)} hint={`${formatNumber(stats.seen_markers)} seen-once markers`} />
+        <StatCard
+          label="Entries stored"
+          value={n(stats.entries)}
+          hint={operator ? `${n(stats.seen_markers)} seen-once markers` : "operator view only"}
+        />
         <StatCard
           label="Memory"
-          value={memoryKnown ? formatBytes(stats.used_memory_bytes) : "—"}
-          hint={stats.max_memory_bytes ? `of ${formatBytes(stats.max_memory_bytes)} limit` : "no limit set"}
+          value={memoryKnown ? formatBytes(used) : "—"}
+          hint={!operator ? "operator view only" : limit ? `of ${formatBytes(limit)} limit` : "no limit set"}
         />
-        <StatCard label="Evictions" value={formatNumber(stats.evicted_keys)} hint="since the cache started" />
+        <StatCard label="Evictions" value={n(stats.evicted_keys)} hint="since the cache started" />
         <StatCard label="Kept out" value={formatNumber(stats.admission_rejected)} hint="one-off prompts not stored" />
         <StatCard label="Hits per MB" value={stats.hits_per_mb === null ? "—" : formatNumber(Math.round(stats.hits_per_mb))} hint="memory efficiency" />
       </div>
@@ -73,25 +81,35 @@ export async function CacheContent({ hours }: { hours: number }) {
 
         <Panel title="Memory" description="The cache runs in its own Redis so it can never evict limits or quotas">
           <div className="space-y-4">
-            {stats.max_memory_bytes > 0 && memoryKnown ? (
+            {limit > 0 && memoryKnown ? (
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-                  <span>{formatBytes(stats.used_memory_bytes)} used</span>
-                  <span>{formatPercent(stats.used_memory_bytes / stats.max_memory_bytes)} of {formatBytes(stats.max_memory_bytes)}</span>
+                  <span>{formatBytes(used)} used</span>
+                  <span>
+                    {formatPercent(used / limit)} of {formatBytes(limit)}
+                  </span>
                 </div>
-                <Meter value={stats.used_memory_bytes} max={stats.max_memory_bytes} label="Cache memory used" />
+                <Meter value={used} max={limit} label="Cache memory used" />
               </div>
             ) : (
-              <p className="text-muted-foreground">No memory limit reported.</p>
+              <p className="text-muted-foreground">
+                {operator ? "No memory limit reported." : "Memory figures are shown to the operator only."}
+              </p>
             )}
             <dl className="grid grid-cols-2 gap-3 text-[13px]">
               <div>
                 <dt className="text-xs text-muted-foreground">Eviction policy</dt>
-                <dd className="font-mono">{stats.eviction_policy}</dd>
+                <dd className="font-mono">{stats.eviction_policy ?? "—"}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Instance</dt>
-                <dd>{stats.separate_instance ? "Dedicated cache Redis" : "Shared with state (dev)"}</dd>
+                <dd>
+                  {stats.separate_instance === null
+                    ? "—"
+                    : stats.separate_instance
+                      ? "Dedicated cache Redis"
+                      : "Shared with state (dev)"}
+                </dd>
               </div>
             </dl>
           </div>

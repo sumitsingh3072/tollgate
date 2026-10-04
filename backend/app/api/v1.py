@@ -1,5 +1,7 @@
 """OpenAI-compatible data plane: /v1/chat/completions, /v1/models."""
 
+import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +20,8 @@ from app.errors import DEPENDENCY_ERRORS, GatewayError
 from app.logging_queue import LogQueue, RequestRecord
 from app.schemas import ChatCompletionRequest, ModelCard, ModelList
 from app.telemetry import metrics
+
+log = logging.getLogger("tollgate.v1")
 
 router = APIRouter(prefix="/v1", tags=["v1"], dependencies=[Depends(require_api_key)])
 
@@ -131,7 +135,9 @@ class _Context:
         """Identical eligible requests share a flight; JSON and SSE responses are separate flights."""
         if self.key_for_cache is None or not self.state.settings.coalescing_enabled:
             return None
-        return f"{self.key_for_cache}:{mode}"
+        # Coalescing stays within one key even for a shared cache pool: a follower inherits the
+        # leader's queue position, errors and fair-queue charges, which must not cross tenants.
+        return f"{self.key_for_cache}:{self.key_id}:{mode}"
 
     def headers(self, flight: Flight, role: Role) -> dict[str, str]:
         waited = 0 if role == "follower" else flight.queue_wait_ms or 0
@@ -196,7 +202,7 @@ async def _complete(ctx: _Context) -> JSONResponse:
         )
         flight.set_meta(result.upstream.model, result.fallback_used)
         if ctx.key_for_cache:
-            flight.cache_status = await _store(ctx, result.upstream.model, result.value, flight)
+            flight.cache_status = await _store_safely(ctx, result.upstream.model, result.value, flight)
         return result.value
 
     flight, role = state.coalescer.join(ctx.coalesce_key("json"), lead)
@@ -213,6 +219,17 @@ async def _complete(ctx: _Context) -> JSONResponse:
     await limits.record_tokens(state.redis, ctx.key.id, used.total_tokens)
     # Upstream JSON is already OpenAI-shaped; skip FastAPI's re-encoding pass.
     return JSONResponse(value, headers=ctx.headers(flight, role))
+
+
+async def _store_safely(
+    ctx: _Context, model: str, body: dict[str, Any] | None, flight: Flight
+) -> cache.CacheStatus | None:
+    """A cache write failure must never throw away an answer the model already produced (and billed)."""
+    try:
+        return await _store(ctx, model, body, flight)
+    except DEPENDENCY_ERRORS as exc:
+        log.warning("cache write failed; answer served uncached", extra={"error": repr(exc)})
+        return "bypass"
 
 
 async def _store(ctx: _Context, model: str, body: dict[str, Any] | None, flight: Flight) -> cache.CacheStatus:
@@ -268,12 +285,15 @@ async def _stream(ctx: _Context) -> StreamingResponse:
                 meter.feed(chunk)
                 queue.charge(ctx.key_id, output_tokens=(meter.content_chars - before) / 4)
                 await flight.emit(chunk)
+        except GatewayError:
+            state.breakers.record_failure(streamed.upstream)  # broke mid-stream: count it
+            raise
         finally:
             queue.release(streamed.upstream.model, ticket)
         if ctx.key_for_cache:
             meter.result()  # flush a trailing partial line
             body = cache.completion_from_stream(meter, streamed.upstream.model)
-            flight.cache_status = await _store(ctx, streamed.upstream.model, body, flight)
+            flight.cache_status = await _store_safely(ctx, streamed.upstream.model, body, flight)
 
     flight, role = state.coalescer.join(ctx.coalesce_key("sse"), lead)
     try:
@@ -287,18 +307,23 @@ async def _stream(ctx: _Context) -> StreamingResponse:
     tracker = usage.SSEUsageTracker(ctx.prompt)
 
     async def body() -> AsyncIterator[bytes]:
+        failed: GatewayError | None = None
         try:
             async for chunk in flight.replay():
                 tracker.feed(chunk)
                 if tracker.content_seen:
                     record.mark_first_token()
                 yield chunk
+        except GatewayError as exc:
+            # Headers are already sent: tell the client in-band, OpenAI style, and log the failure.
+            failed = exc
+            yield f"data: {json.dumps({'error': {'type': exc.type, 'message': exc.message}})}\n\n".encode()
         finally:
             # Synchronous only: this also runs when the client disconnects (cancellation).
             state.coalescer.leave(flight)
             if ctx.key_for_cache:
                 record.cache_status = "miss" if role == "follower" else (flight.cache_status or "miss")
-            record.status, record.usage = 200, tracker.result()
+            record.status, record.usage = (failed.status_code if failed else 200), tracker.result()
             _finish(state.log_queue, record)
             tasks.spawn(limits.record_tokens(state.redis, ctx.key.id, record.usage.total_tokens), name="tokens")
 

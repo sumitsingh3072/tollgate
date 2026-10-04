@@ -215,3 +215,9 @@ async def test_cache_stats_endpoint(client, auth, app, gemini) -> None:
 
     overview = (await client.get("/admin/stats", headers={"Authorization": "Bearer test-admin"})).json()
     assert overview["coalesced"] == 0 and "p50_ttft_ms" in overview
+
+
+async def test_cache_stats_hide_instance_figures_from_users(client, auth) -> None:
+    user = {"Authorization": "Bearer test-admin", "X-Tollgate-User": "user_alice"}
+    stats = (await client.get("/admin/cache/stats", headers=user)).json()
+    assert stats["entries"] is None and stats["used_memory_bytes"] is None and stats["eviction_policy"] is None

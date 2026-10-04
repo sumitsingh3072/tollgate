@@ -195,18 +195,33 @@ async def cache_stats(
     window = analytics.Window.last(hours, owner_id=scope.owner_id)
     async with state.sessionmaker() as session:
         statuses = await analytics.counts_by(session, window, RequestLog.cache_status)
+    hits = statuses.get("hit", 0)
+    eligible = hits + statuses.get("miss", 0) + statuses.get("admission_rejected", 0)
+    base = {
+        "window_hours": hours,
+        "requests": sum(statuses.values()),
+        "statuses": {k or "unknown": v for k, v in statuses.items()},
+        "hit_rate": _rate(hits, eligible),
+        "admission_rejected": statuses.get("admission_rejected", 0),
+    }
+    if not scope.is_operator:  # instance-wide memory and entry counts would leak other tenants' usage
+        return CacheStats(
+            **base,
+            entries=None,
+            seen_markers=None,
+            used_memory_bytes=None,
+            max_memory_bytes=None,
+            eviction_policy=None,
+            evicted_keys=None,
+            hits_per_mb=None,
+            separate_instance=None,
+        )
     redis_cache = state.redis_cache
     memory, stats = await asyncio.gather(_redis_info(redis_cache, "memory"), _redis_info(redis_cache, "stats"))
     entries, seen = await asyncio.gather(_count_keys(redis_cache, "cache:*"), _count_keys(redis_cache, "seen:*"))
-    hits = statuses.get("hit", 0)
-    eligible = hits + statuses.get("miss", 0) + statuses.get("admission_rejected", 0)
     used = int(memory.get("used_memory", 0))
     return CacheStats(
-        window_hours=hours,
-        requests=sum(statuses.values()),
-        statuses={k or "unknown": v for k, v in statuses.items()},
-        hit_rate=_rate(hits, eligible),
-        admission_rejected=statuses.get("admission_rejected", 0),
+        **base,
         entries=entries,
         seen_markers=seen,
         used_memory_bytes=used,

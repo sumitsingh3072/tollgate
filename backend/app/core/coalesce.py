@@ -20,6 +20,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.errors import GatewayError
+
 log = logging.getLogger("tollgate.coalesce")
 
 Role = Literal["none", "leader", "follower"]
@@ -39,6 +41,7 @@ class Flight:
         self.cache_status: str | None = None
         self.followers = 0
         self.subscribers = 0
+        self.cancelling = False  # nobody listens any more; new requests must not join
         self.task: asyncio.Task[None] | None = None
         self._changed = asyncio.Condition()
         self._ready = asyncio.Event()
@@ -76,7 +79,8 @@ class Flight:
         return self.result
 
     async def replay(self) -> AsyncIterator[bytes]:
-        """Every chunk, from the first, as it becomes available."""
+        """Every chunk, from the first, as it becomes available; re-raises a mid-stream failure once
+        the buffered chunks are delivered."""
         index = 0
         while True:
             async with self._changed:
@@ -85,6 +89,8 @@ class Flight:
                 yield self.chunks[index]
                 index += 1
             if self.done and index >= len(self.chunks):
+                if self.error is not None:
+                    raise self.error
                 return
 
 
@@ -108,7 +114,8 @@ class Coalescer:
 
     def join(self, key: str | None, start: Callable[[Flight], Awaitable[Any]]) -> tuple[Flight, Role]:
         """Attach to an identical in-flight request, or start a new flight running `start`."""
-        if key is not None and (existing := self._flights.get(key)) is not None and not existing.done:
+        existing = self._flights.get(key) if key is not None else None
+        if existing is not None and not existing.done and not existing.cancelling:
             existing.followers += 1
             existing.subscribers += 1
             self.stats.followers += 1
@@ -127,13 +134,21 @@ class Coalescer:
         """A subscriber is gone (finished or disconnected). Synchronous: safe in finally blocks."""
         flight.subscribers -= 1
         if flight.subscribers <= 0 and not flight.done and flight.task is not None:
-            flight.task.cancel()  # nobody is listening any more
+            # Nobody is listening any more. Unregister now so an identical request arriving while the
+            # task unwinds (closing the upstream connection takes a moment) starts a fresh flight.
+            flight.cancelling = True
+            if flight.key is not None and self._flights.get(flight.key) is flight:
+                del self._flights[flight.key]
+            flight.task.cancel()
 
     async def _run(self, flight: Flight, start: Callable[[Flight], Awaitable[Any]]) -> None:
         try:
             result = await start(flight)
         except asyncio.CancelledError:
-            await asyncio.shield(flight._finish(error=asyncio.CancelledError()))
+            # Subscribers get a normal gateway error, never a CancelledError (which would escape
+            # request handling as an unlogged 500).
+            cancelled = GatewayError(503, "upstream_cancelled", "The shared upstream call was cancelled; retry.")
+            await asyncio.shield(flight._finish(error=cancelled))
             raise
         except Exception as exc:  # delivered to every subscriber
             await flight._finish(error=exc)

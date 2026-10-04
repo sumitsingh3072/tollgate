@@ -243,11 +243,12 @@ class CacheStats(BaseModel):
     statuses: dict[str, int] = Field(description="Requests per cache_status in the window")
     hit_rate: float = Field(description="hits / cache-eligible requests (hit + miss + admission_rejected)")
     admission_rejected: int
-    entries: int = Field(description="Cached responses currently stored")
-    seen_markers: int = Field(description="First-sighting markers (admission ghosts)")
-    used_memory_bytes: int
-    max_memory_bytes: int = Field(description="0 = no limit (cache shares the state Redis)")
-    eviction_policy: str
-    evicted_keys: int = Field(description="Since the cache Redis started")
+    # Instance-wide Redis figures: operator view only (None for signed-in users).
+    entries: int | None = Field(description="Cached responses currently stored")
+    seen_markers: int | None = Field(description="First-sighting markers (admission ghosts)")
+    used_memory_bytes: int | None
+    max_memory_bytes: int | None = Field(description="0 = no limit (cache shares the state Redis)")
+    eviction_policy: str | None
+    evicted_keys: int | None = Field(description="Since the cache Redis started")
     hits_per_mb: float | None
-    separate_instance: bool
+    separate_instance: bool | None
