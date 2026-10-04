@@ -35,16 +35,15 @@ async def sse_body() -> AsyncIterator[bytes]:
 
 
 async def test_non_stream_forwards_to_first_model(
-    make_client, settings: Settings, respx_mock: respx.MockRouter
+    client: httpx.AsyncClient, auth: dict[str, str], settings: Settings, respx_mock: respx.MockRouter
 ) -> None:
     route = respx_mock.post(chat_url(settings)).mock(return_value=httpx.Response(200, json=COMPLETION))
 
-    async with make_client() as client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={"model": "smart", "messages": MESSAGES, "temperature": 0, "top_p": 0.9},
-            headers={"Authorization": "Bearer tg_client_key"},
-        )
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "smart", "messages": MESSAGES, "temperature": 0, "top_p": 0.9},
+        headers=auth,
+    )
 
     assert resp.status_code == 200
     assert resp.json() == COMPLETION
@@ -58,30 +57,30 @@ async def test_non_stream_forwards_to_first_model(
 
 
 async def test_client_extra_body_overrides_defaults(
-    make_client, settings: Settings, respx_mock: respx.MockRouter
+    client: httpx.AsyncClient, auth: dict[str, str], settings: Settings, respx_mock: respx.MockRouter
 ) -> None:
     route = respx_mock.post(chat_url(settings)).mock(return_value=httpx.Response(200, json=COMPLETION))
     extra = {"google": {"thinking_config": {"thinking_level": "high"}}}
 
-    async with make_client() as client:
-        await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "extra_body": extra})
+    await client.post(
+        "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "extra_body": extra}, headers=auth
+    )
 
     body = json.loads(route.calls.last.request.content)
     assert body["model"] == settings.gemini_fast_model
     assert body["extra_body"] == extra
 
 
-async def test_stream_relays_chunks_in_order(make_client, settings: Settings, respx_mock: respx.MockRouter) -> None:
+async def test_stream_relays_chunks_in_order(
+    client: httpx.AsyncClient, auth: dict[str, str], settings: Settings, respx_mock: respx.MockRouter
+) -> None:
     route = respx_mock.post(chat_url(settings)).mock(
         return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body())
     )
 
-    async with (
-        make_client() as client,
-        client.stream(
-            "POST", "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "stream": True}
-        ) as resp,
-    ):
+    async with client.stream(
+        "POST", "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "stream": True}, headers=auth
+    ) as resp:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/event-stream")
         lines = [line async for line in resp.aiter_lines() if line]
@@ -93,13 +92,14 @@ async def test_stream_relays_chunks_in_order(make_client, settings: Settings, re
 
 
 async def test_stream_upstream_error_returns_json_status(
-    make_client, settings: Settings, respx_mock: respx.MockRouter
+    client: httpx.AsyncClient, auth: dict[str, str], settings: Settings, respx_mock: respx.MockRouter
 ) -> None:
     gemini_error = [{"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}}]
     respx_mock.post(chat_url(settings)).mock(return_value=httpx.Response(503, json=gemini_error))
 
-    async with make_client() as client:
-        resp = await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "stream": True})
+    resp = await client.post(
+        "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "stream": True}, headers=auth
+    )
 
     assert resp.status_code == 503
     assert resp.json()["error"]["type"] == "upstream_error"
@@ -119,13 +119,18 @@ async def test_stream_upstream_error_returns_json_status(
     ],
 )
 async def test_upstream_errors_mapped_to_openai_envelope(
-    make_client, settings: Settings, respx_mock: respx.MockRouter, upstream_status: int, status: int, type_: str
+    client: httpx.AsyncClient,
+    auth: dict[str, str],
+    settings: Settings,
+    respx_mock: respx.MockRouter,
+    upstream_status: int,
+    status: int,
+    type_: str,
 ) -> None:
     gemini_error = [{"error": {"code": upstream_status, "message": "boom", "status": "X"}}]
     respx_mock.post(chat_url(settings)).mock(return_value=httpx.Response(upstream_status, json=gemini_error))
 
-    async with make_client() as client:
-        resp = await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES})
+    resp = await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES}, headers=auth)
 
     assert resp.status_code == status
     assert resp.json() == {"error": {"type": type_, "message": f"upstream {settings.gemini_fast_model}: boom"}}
@@ -136,20 +141,24 @@ async def test_upstream_errors_mapped_to_openai_envelope(
     [(httpx.ReadTimeout("slow"), 504, "upstream_timeout"), (httpx.ConnectError("down"), 502, "upstream_unreachable")],
 )
 async def test_transport_errors(
-    make_client, settings: Settings, respx_mock: respx.MockRouter, exc: Exception, status: int, type_: str
+    client: httpx.AsyncClient,
+    auth: dict[str, str],
+    settings: Settings,
+    respx_mock: respx.MockRouter,
+    exc: Exception,
+    status: int,
+    type_: str,
 ) -> None:
     respx_mock.post(chat_url(settings)).mock(side_effect=exc)
 
-    async with make_client() as client:
-        resp = await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES})
+    resp = await client.post("/v1/chat/completions", json={"model": "fast", "messages": MESSAGES}, headers=auth)
 
     assert resp.status_code == status
     assert resp.json()["error"]["type"] == type_
 
 
-async def test_unknown_alias_is_404(make_client) -> None:
-    async with make_client() as client:
-        resp = await client.post("/v1/chat/completions", json={"model": "gpt-4o", "messages": MESSAGES})
+async def test_unknown_alias_is_404(client: httpx.AsyncClient, auth: dict[str, str]) -> None:
+    resp = await client.post("/v1/chat/completions", json={"model": "gpt-4o", "messages": MESSAGES}, headers=auth)
 
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "model_not_found"
@@ -164,17 +173,15 @@ async def test_unknown_alias_is_404(make_client) -> None:
         {"model": "fast", "messages": MESSAGES, "temperature": 5},
     ],
 )
-async def test_invalid_requests_are_422(make_client, payload: dict) -> None:
-    async with make_client() as client:
-        resp = await client.post("/v1/chat/completions", json=payload)
+async def test_invalid_requests_are_422(client: httpx.AsyncClient, auth: dict[str, str], payload: dict) -> None:
+    resp = await client.post("/v1/chat/completions", json=payload, headers=auth)
 
     assert resp.status_code == 422
     assert resp.json()["error"]["type"] == "invalid_request_error"
 
 
-async def test_list_models(make_client) -> None:
-    async with make_client() as client:
-        resp = await client.get("/v1/models")
+async def test_list_models(client: httpx.AsyncClient, auth: dict[str, str]) -> None:
+    resp = await client.get("/v1/models", headers=auth)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -182,10 +189,9 @@ async def test_list_models(make_client) -> None:
     assert [m["id"] for m in body["data"]] == ["fast", "smart", "smart-terse"]
 
 
-async def test_get_model(make_client) -> None:
-    async with make_client() as client:
-        ok = await client.get("/v1/models/smart")
-        missing = await client.get("/v1/models/nope")
+async def test_get_model(client: httpx.AsyncClient, auth: dict[str, str]) -> None:
+    ok = await client.get("/v1/models/smart", headers=auth)
+    missing = await client.get("/v1/models/nope", headers=auth)
 
     assert ok.json()["id"] == "smart"
     assert missing.status_code == 404

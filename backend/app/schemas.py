@@ -1,8 +1,10 @@
 """OpenAI-compatible request/response shapes. Unknown fields are allowed and forwarded unchanged."""
 
-from typing import Any, Literal
+import uuid
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 
 class ChatMessage(BaseModel):
@@ -38,3 +40,36 @@ class ModelCard(BaseModel):
 class ModelList(BaseModel):
     object: Literal["list"] = "list"
     data: list[ModelCard]
+
+
+def _as_utc(value: datetime) -> datetime:
+    # Some drivers (SQLite in tests) drop tzinfo; timestamps are always stored in UTC.
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+UtcDatetime = Annotated[datetime, AfterValidator(_as_utc)]
+
+
+class KeyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    rpm: int = Field(default=60, ge=1, le=100_000)
+    daily_token_quota: int = Field(default=100_000, ge=1, le=1_000_000_000)
+
+
+class KeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    prefix: str
+    rpm: int
+    daily_token_quota: int
+    created_at: UtcDatetime
+    revoked_at: UtcDatetime | None
+    tokens_today: int = 0
+
+
+class KeyCreated(KeyOut):
+    key: str = Field(description="Full API key. Returned only once; store it now.")
