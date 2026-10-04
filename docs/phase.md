@@ -63,12 +63,15 @@ Done when: OpenAI Python SDK works with only base_url changed, streaming include
 Done when: hammering one key hits its limit while a second key still works.
 
 ## Phase 3: Cache, failover, terse
-- [ ] Exact cache for temperature 0 non-streaming, TTL 1h
-- [ ] Fallback through the chain on connect error, timeout, 5xx
-- [ ] Circuit breaker: 3 failures -> open 30s
-- [ ] demo-failover alias: mock upstream -> fast Gemma model
-- [ ] Terse mode system-prompt injection for *-terse aliases
-- [ ] Response headers x-tollgate-model / -cache / -fallback
+- [x] Exact cache for temperature 0 non-streaming, TTL 1h (key = sha256 of the
+      canonical body, so tools/response_format etc. never collide; hits not billed)
+- [x] Fallback through the chain on connect error, timeout, 5xx (and upstream 429);
+      streams fall back until the first byte
+- [x] Circuit breaker: 3 failures -> open 30s, then half-open trial
+- [x] demo-failover alias: mock upstream -> fast Gemma model
+- [x] Terse mode system-prompt injection for *-terse aliases (merged into an
+      existing system message)
+- [x] Response headers x-tollgate-model / -cache (hit|miss|bypass) / -fallback
 Done when: demo-failover fails over cleanly and a repeated request returns
 cache: hit.
 

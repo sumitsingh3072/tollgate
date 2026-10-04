@@ -14,6 +14,7 @@ from sqlalchemy import text
 from app.api import admin, v1
 from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings
 from app.core import tasks
+from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
@@ -74,6 +75,7 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
     )
     app.state.settings = settings
     app.state.aliases = build_aliases(settings)
+    app.state.breakers = CircuitBreakers(settings.breaker_failure_threshold, settings.breaker_open_seconds)
 
     # Order matters: the last-added middleware is outermost, so request ids wrap CORS too.
     app.add_middleware(

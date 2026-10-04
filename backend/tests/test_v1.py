@@ -186,7 +186,7 @@ async def test_list_models(client: httpx.AsyncClient, auth: dict[str, str]) -> N
     assert resp.status_code == 200
     body = resp.json()
     assert body["object"] == "list"
-    assert [m["id"] for m in body["data"]] == ["fast", "smart", "smart-terse"]
+    assert [m["id"] for m in body["data"]] == ["fast", "smart", "smart-terse", "demo-failover"]
 
 
 async def test_get_model(client: httpx.AsyncClient, auth: dict[str, str]) -> None:
