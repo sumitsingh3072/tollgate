@@ -73,3 +73,57 @@ class KeyOut(BaseModel):
 
 class KeyCreated(KeyOut):
     key: str = Field(description="Full API key. Returned only once; store it now.")
+
+
+class KeyUsage(BaseModel):
+    key_id: uuid.UUID | None
+    name: str | None
+    prefix: str | None
+    requests: int
+    tokens: int
+    errors: int
+
+
+class ModelUsage(BaseModel):
+    model: str | None
+    requests: int
+    tokens: int
+
+
+class Stats(BaseModel):
+    window_hours: int
+    requests: int
+    errors: int
+    error_rate: float
+    cache_hits: int
+    cache_hit_rate: float
+    fallbacks: int
+    in_tokens: int
+    out_tokens: int
+    p50_latency_ms: float | None
+    p95_latency_ms: float | None
+    by_key: list[KeyUsage]
+    by_model: list[ModelUsage]
+
+
+class LogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ts: UtcDatetime
+    key_id: uuid.UUID | None
+    key_name: str | None = None
+    key_prefix: str | None = None
+    alias: str
+    model_used: str | None
+    in_tokens: int
+    out_tokens: int
+    latency_ms: int
+    status: int
+    cache_hit: bool
+    fallback_used: bool
+
+
+class LogPage(BaseModel):
+    items: list[LogOut]
+    next_cursor: int | None = Field(description="Pass as ?before= to fetch the next (older) page.")

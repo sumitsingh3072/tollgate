@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
 from app.db.session import create_sessionmaker, init_db
+from app.logging_queue import LogQueue
 from app.main import create_app
 
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
@@ -73,6 +74,8 @@ def make_app(settings: Settings, http: httpx.AsyncClient, redis: FakeAsyncRedis,
         app.state.engine = engine if db_up else DownEngine()
         app.state.sessionmaker = create_sessionmaker(engine)
         app.state.http = http
+        # Not started: tests flush explicitly instead of waiting for the timer.
+        app.state.log_queue = LogQueue(app.state.sessionmaker, settings.log_flush_interval)
         return app
 
     return _make
@@ -88,8 +91,14 @@ def make_client(make_app: Callable[..., FastAPI]) -> Callable[..., httpx.AsyncCl
 
 
 @pytest.fixture
-async def client(make_client: Callable[..., httpx.AsyncClient]) -> AsyncIterator[httpx.AsyncClient]:
-    async with make_client() as c:
+def app(make_app: Callable[..., FastAPI]) -> FastAPI:
+    return make_app()
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
