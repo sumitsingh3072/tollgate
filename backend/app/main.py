@@ -1,5 +1,6 @@
 """App factory and lifespan (shared httpx client, redis, db engine)."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,17 +12,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api import admin, v1
-from app.config import get_settings
+from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings
 from app.db.session import create_engine, create_sessionmaker, init_db
+from app.errors import install_error_handlers
+from app.logging_setup import configure_logging
+from app.middleware import RequestContextMiddleware
 
 log = logging.getLogger("tollgate")
+
+HEALTH_CHECK_TIMEOUT = 3.0  # Neon can take ~1-2s to wake from scale-to-zero
+TOLLGATE_HEADERS = ["x-tollgate-model", "x-tollgate-cache", "x-tollgate-fallback", "x-request-id"]
+
+
+def _warn_on_insecure_config(settings: Settings) -> None:
+    if settings.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN:
+        log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
+    if not settings.gemini_api_key.get_secret_value():
+        log.warning("GEMINI_API_KEY is not set; upstream calls will fail with 401")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_settings()
+    settings: Settings = app.state.settings
+    _warn_on_insecure_config(settings)
+
     app.state.http = httpx.AsyncClient(
-        timeout=httpx.Timeout(settings.upstream_timeout, connect=5.0),
+        timeout=httpx.Timeout(settings.upstream_timeout, connect=settings.upstream_connect_timeout),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -31,31 +47,49 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await init_db(app.state.engine)
     except Exception:
         # Keep serving; /health reports db=false until the DB is reachable.
-        log.exception("create_all failed")
+        log.exception("database init failed; continuing without schema check")
+
+    log.info("gateway started", extra={"env": settings.environment, "aliases": ",".join(app.state.aliases)})
     try:
         yield
     finally:
         await app.state.http.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()
+        log.info("gateway stopped")
 
 
-def create_app(*, use_lifespan: bool = True) -> FastAPI:
-    app = FastAPI(title="Tollgate Lite", lifespan=lifespan if use_lifespan else None)
+def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -> FastAPI:
+    settings = settings or get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+
+    app = FastAPI(
+        title="Tollgate Lite",
+        version="0.1.0",
+        lifespan=lifespan if use_lifespan else None,
+        docs_url=None if settings.environment == "production" else "/docs",
+        redoc_url=None,
+    )
+    app.state.settings = settings
+    app.state.aliases = build_aliases(settings)
+
+    # Order matters: the last-added middleware is outermost, so request ids wrap CORS too.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["x-tollgate-model", "x-tollgate-cache", "x-tollgate-fallback"],
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+        expose_headers=TOLLGATE_HEADERS,
     )
+    app.add_middleware(RequestContextMiddleware)
+    install_error_handlers(app)
+
     app.include_router(v1.router)
     app.include_router(admin.router)
 
-    @app.get("/health")
+    @app.get("/health", tags=["ops"])
     async def health(request: Request) -> dict[str, object]:
-        redis_ok = await _check_redis(request.app)
-        db_ok = await _check_db(request.app)
+        redis_ok, db_ok = await asyncio.gather(_check_redis(request.app), _check_db(request.app))
         return {"status": "ok" if redis_ok and db_ok else "degraded", "redis": redis_ok, "db": db_ok}
 
     return app
@@ -63,17 +97,22 @@ def create_app(*, use_lifespan: bool = True) -> FastAPI:
 
 async def _check_redis(app: FastAPI) -> bool:
     try:
-        return bool(await app.state.redis.ping())
-    except Exception:
+        return bool(await asyncio.wait_for(app.state.redis.ping(), HEALTH_CHECK_TIMEOUT))
+    except Exception as exc:
+        log.warning("redis health check failed", extra={"error": repr(exc)})
         return False
 
 
 async def _check_db(app: FastAPI) -> bool:
-    try:
+    async def ping() -> None:
         async with app.state.engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+    try:
+        await asyncio.wait_for(ping(), HEALTH_CHECK_TIMEOUT)
         return True
-    except Exception:
+    except Exception as exc:
+        log.warning("db health check failed", extra={"error": repr(exc)})
         return False
 
 

@@ -34,9 +34,7 @@ class RequestLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    key_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True
-    )
+    key_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
     alias: Mapped[str] = mapped_column(Text)
     model_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     in_tokens: Mapped[int] = mapped_column(Integer, default=0)

@@ -2,28 +2,61 @@
 
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Annotated, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+DEFAULT_ADMIN_TOKEN = "change-me"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Root .env is shared with docker compose; backend/.env (if present) overrides it.
+    model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/tollgate"
+    environment: Literal["development", "production", "test"] = "development"
+    log_level: str = "INFO"
+    log_format: Literal["console", "json"] = "console"
+
+    database_url: str = "postgresql+asyncpg://tollgate:tollgate@localhost:5432/tollgate"
     redis_url: str = "redis://localhost:6379/0"
-    ollama_base_url: str = "http://localhost:11434/v1"
+
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_fast_model: str = "gemma-4-26b-a4b-it"
+    gemini_smart_model: str = "gemma-4-31b-it"
     mock_upstream_url: str = "http://localhost:9000/v1"
-    admin_token: str = "change-me"
+
+    admin_token: SecretStr = SecretStr(DEFAULT_ADMIN_TOKEN)
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+
     key_cache_ttl: int = 60
     log_flush_interval: float = 2.0
     upstream_timeout: float = 60.0
+    upstream_connect_timeout: float = 5.0
 
     @field_validator("database_url")
     @classmethod
     def _asyncpg_url(cls, v: str) -> str:
         return normalize_database_url(v)
+
+    @field_validator("gemini_base_url", "mock_upstream_url")
+    @classmethod
+    def _strip_slash(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
+    @field_validator("log_level")
+    @classmethod
+    def _upper_level(cls, v: str) -> str:
+        return v.upper()
 
 
 def normalize_database_url(url: str) -> str:
@@ -51,24 +84,26 @@ def get_settings() -> Settings:
 
 @dataclass(frozen=True)
 class Upstream:
+    """One OpenAI-compatible endpoint + model. api_key is kept out of repr/logs."""
+
     model: str
     base_url: str
+    api_key: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
 class Alias:
-    chain: list[Upstream] = field(default_factory=list)
+    chain: tuple[Upstream, ...]
     terse: bool = False
 
 
 def build_aliases(settings: Settings) -> dict[str, Alias]:
-    ollama = settings.ollama_base_url
-    smart = [Upstream("llama3.2:3b", ollama), Upstream("qwen2.5:1.5b", ollama)]
+    key = settings.gemini_api_key.get_secret_value()
+    fast = Upstream(settings.gemini_fast_model, settings.gemini_base_url, key)
+    smart = Upstream(settings.gemini_smart_model, settings.gemini_base_url, key)
+    smart_chain = (smart, fast)
     return {
-        "fast": Alias(chain=[Upstream("qwen2.5:1.5b", ollama)]),
-        "smart": Alias(chain=smart),
-        "smart-terse": Alias(chain=smart, terse=True),
+        "fast": Alias(chain=(fast,)),
+        "smart": Alias(chain=smart_chain),
+        "smart-terse": Alias(chain=smart_chain, terse=True),
     }
-
-
-MODEL_ALIASES: dict[str, Alias] = build_aliases(get_settings())

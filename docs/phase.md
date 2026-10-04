@@ -1,61 +1,88 @@
-# Tollgate Lite: Phases (5 hours total)
+# Tollgate Lite: Phases
 
 Mark tasks [x] as they are completed. One phase per session. Do not start
-the next phase until "Done when" passes.
+the next phase until "Done when" passes. Every phase keeps `ruff check`,
+`pytest`, `pnpm lint` and `pnpm build` green.
 
-## Phase 0: Setup (0:00-0:30)
+## Phase 0: Setup and foundation
 - [x] Create folder structure from architecture.md with stub modules (docstrings only)
-- [x] backend requirements.txt with pinned versions; .env.example
-      (DATABASE_URL, REDIS_URL, OLLAMA_BASE_URL, ADMIN_TOKEN, KEY_CACHE_TTL=60,
-      LOG_FLUSH_INTERVAL=2)
-- [x] config.py Settings + MODEL_ALIASES; db/models.py tables; create_all on startup
+- [x] backend requirements.txt with pinned versions
+- [x] config.py Settings + aliases; db/models.py tables; create_all on startup
 - [x] main.py lifespan: shared httpx.AsyncClient, redis client, db engine
 - [x] GET /health with redis + db checks; tests/test_health.py
 - [x] mock_upstream.py (FastAPI on :9000, always 500)
-- [x] docker-compose.yml with redis:7
 - [x] frontend: create-next-app (TS, Tailwind, App Router), shadcn init,
       sidebar layout, placeholder pages, admin proxy route, .env.example
-Done when: pytest passes, /health shows redis and db true, `pnpm build` passes.
+- [x] Switch upstream from Ollama to Gemma 4 on the Gemini API (OpenAI-compatible endpoint);
+      Upstream carries api_key (hidden from repr); model IDs env-configurable
+- [x] Single root .env.example shared by compose and the local backend
+      (GEMINI_API_KEY, DATABASE_URL, REDIS_URL, ADMIN_TOKEN, CORS_ORIGINS, LOG_*)
+- [x] Structured logging (console / JSON), request-id middleware, access log,
+      OpenAI-style error envelopes for 404/422/500, startup warnings for
+      default ADMIN_TOKEN / missing GEMINI_API_KEY
+- [x] /health checks run concurrently with a timeout
+- [x] requirements-dev.txt, pyproject.toml (ruff + pytest), tests for config,
+      middleware and errors
+- [x] Dockerfiles (backend + mock, frontend standalone), non-root, healthchecks;
+      docker compose for the full stack, optional local Postgres profile,
+      overridable host ports
+- [x] Dashboard shell: Linear-inspired tokens (light + dark), Inter, shadcn
+      sidebar (inset, collapsible to icons, ⌘B), header, theme toggle
+      (light/dark/system, no flash), live gateway status, empty-state pages
+Done when: pytest + ruff pass, `pnpm lint && pnpm build` pass,
+`docker compose --profile localdb up -d --build` reports all services healthy
+and /health shows redis and db true.
 
-## Phase 1: Streaming proxy (0:30-1:20)
+## Phase 1: Streaming proxy (Gemma via Gemini API)
 - [ ] POST /v1/chat/completions forwards to the first model in the alias chain
-- [ ] stream=true relays SSE chunks via StreamingResponse
-- [ ] GET /v1/models lists aliases
-- [ ] respx tests: non-stream and stream chunk-by-chunk
+      (Bearer upstream.api_key, model rewritten to the Gemma model id)
+- [ ] Request schema: validate messages/model, pass unknown OpenAI fields through
+- [ ] stream=true relays SSE chunks via StreamingResponse; request
+      stream_options.include_usage
+- [ ] Upstream 4xx/5xx mapped to the OpenAI error envelope; unknown alias -> 404
+- [ ] GET /v1/models lists aliases (OpenAI list shape)
+- [ ] Log one line per upstream call (alias, model, status, latency_ms)
+- [ ] respx tests: non-stream, stream chunk-by-chunk, upstream error mapping
 Done when: OpenAI Python SDK works with only base_url changed, streaming included.
 
-## Phase 2: Keys and limits (1:20-2:00)
+## Phase 2: Keys and limits
 - [ ] POST/GET/DELETE /admin/keys; tg_live_ + 32 random chars; store SHA-256 only
+- [ ] Admin-token dependency (constant-time compare)
 - [ ] Auth dependency with Redis-cached lookup (60s TTL); revoke deletes cache entry
-- [ ] RPM limit and daily token quota in Redis; 429 with clear JSON
+- [ ] RPM limit and daily token quota in Redis; 429 with clear JSON + Retry-After
 Done when: hammering one key hits its limit while a second key still works.
 
-## Phase 3: Cache, failover, terse (2:00-2:50)
+## Phase 3: Cache, failover, terse
 - [ ] Exact cache for temperature 0 non-streaming, TTL 1h
 - [ ] Fallback through the chain on connect error, timeout, 5xx
 - [ ] Circuit breaker: 3 failures -> open 30s
+- [ ] demo-failover alias: mock upstream -> fast Gemma model
 - [ ] Terse mode system-prompt injection for *-terse aliases
 - [ ] Response headers x-tollgate-model / -cache / -fallback
-Done when: a chain starting with the mock upstream fails over cleanly and a
-repeated request returns cache: hit.
+Done when: demo-failover fails over cleanly and a repeated request returns
+cache: hit.
 
-## Phase 4: Logging and analytics (2:50-3:20)
-- [ ] asyncio queue + background flusher, batch insert every 2s
+## Phase 4: Logging and analytics
+- [ ] asyncio queue + background flusher, batch insert every 2s; drain on shutdown
 - [ ] GET /admin/stats: totals, tokens by key, cache hit rate, error rate, p50/p95
 - [ ] GET /admin/logs: pagination + filters
 Done when: stats reflect requests just made; no DB call on the request path.
 
-## Phase 5: Dashboard (3:20-4:30)
-- [ ] Overview: stat cards + tokens-by-key bar chart (Recharts)
-- [ ] Keys: create dialog (show key once, copy button), list, revoke
-- [ ] Logs: table with status/cache/fallback badges
+## Phase 5: Dashboard (shadcn, Linear-style, light + dark)
+- [ ] Shared: loading skeletons, error + empty states, toasts (sonner)
+- [ ] Overview: stat cards + tokens-by-key bar chart (Recharts, theme-aware colors)
+- [ ] Keys: create dialog (show key once, copy button), table, revoke confirm
+- [ ] Logs: table with status/cache/fallback badges, filters, pagination
 - [ ] Playground: alias picker, streaming output, shows response headers
-Done when: create key -> chat in Playground -> see it in Logs and Overview.
+- [ ] Command menu (⌘K) for navigation
+Done when: create key -> chat in Playground -> see it in Logs and Overview,
+in both light and dark themes.
 
-## Phase 6: Ship (4:30-5:00)
-- [ ] README: pitch, Mermaid diagram, quickstart, SDK + Open WebUI examples
+## Phase 6: Hardening and ship
+- [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
+- [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table
 - [ ] Demo recording: stream, cache hit, 429, failover
 Done when: a stranger can run it from the README in under 10 minutes.
 
-Cut order if late: circuit breaker -> terse mode -> Overview charts.
+Cut order if late: command menu -> circuit breaker -> terse mode -> Overview charts.
