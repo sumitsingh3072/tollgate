@@ -95,6 +95,11 @@ Done when: stats reflect requests just made; no DB call on the request path.
 - [x] Playground: alias picker (with chain), multi-turn streaming chat, stop, response
       headers + timing + usage panel; key kept in sessionStorage
 - [x] Command menu (⌘K) for navigation and theme
+- [x] Richer Overview: stat tiles with delta vs previous window + sparkline, traffic
+      chart (requests / tokens / latency), GitHub-style yearly activity heatmap,
+      status mix, latency histogram, model and alias breakdown tables; chart palette
+      validated for both themes (dataviz validator)
+- [x] scripts/seed_demo.py: a year of synthetic traffic for demos (explicit DB URL only)
 - [x] Backend: GET /admin/aliases; CORS exposes x-ratelimit-* / retry-after
 Done when: create key -> chat in Playground -> see it in Logs and Overview,
 in both light and dark themes.

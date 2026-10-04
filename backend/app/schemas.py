@@ -84,14 +84,28 @@ class KeyUsage(BaseModel):
     errors: int
 
 
-class ModelUsage(BaseModel):
-    model: str | None
+class GroupUsage(BaseModel):
+    name: str | None
     requests: int
     tokens: int
+    errors: int
+    avg_latency_ms: float | None
 
 
-class Stats(BaseModel):
-    window_hours: int
+class StatusMix(BaseModel):
+    success: int
+    client_errors: int = Field(description="4xx other than 429")
+    rate_limited: int
+    server_errors: int
+
+
+class LatencyBin(BaseModel):
+    lower_ms: int
+    upper_ms: int | None = Field(description="None for the open-ended last bin")
+    count: int
+
+
+class PeriodTotals(BaseModel):
     requests: int
     errors: int
     error_rate: float
@@ -102,8 +116,36 @@ class Stats(BaseModel):
     out_tokens: int
     p50_latency_ms: float | None
     p95_latency_ms: float | None
+
+
+class SeriesPoint(BaseModel):
+    ts: UtcDatetime
+    requests: int
+    errors: int
+    cache_hits: int
+    fallbacks: int
+    in_tokens: int
+    out_tokens: int
+    avg_latency_ms: float | None
+
+
+class Stats(PeriodTotals):
+    window_hours: int
+    previous: PeriodTotals = Field(description="Same-length window immediately before this one")
+    status_mix: StatusMix
+    latency_histogram: list[LatencyBin] = Field(description="Upstream-served requests only")
+    bucket_seconds: int
+    series: list[SeriesPoint]
     by_key: list[KeyUsage]
-    by_model: list[ModelUsage]
+    by_alias: list[GroupUsage]
+    by_model: list[GroupUsage]
+
+
+class ActivityDay(BaseModel):
+    date: str = Field(description="UTC day, YYYY-MM-DD")
+    requests: int
+    tokens: int
+    errors: int
 
 
 class LogOut(BaseModel):

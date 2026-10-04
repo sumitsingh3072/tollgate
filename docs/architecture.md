@@ -88,6 +88,7 @@ flowchart LR
 | GET    | /admin/stats          | Totals, tokens by key, cache rate, p50/p95|
 | GET    | /admin/logs           | Paginated logs, filters: key, alias, status|
 | GET    | /admin/aliases        | Aliases with their model chains          |
+| GET    | /admin/activity       | Daily totals for the activity heatmap    |
 
 ## Data model (Neon)
 api_keys: id uuid pk, name text, key_hash text unique, prefix text, rpm int,
@@ -102,6 +103,9 @@ Percentiles via SQL: percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms).
 ts is set by the gateway when the request starts (not at insert time). out_tokens =
 total_tokens - prompt_tokens, so in + out equals what the quota was charged. Cache
 hits are logged with 0 tokens. /admin/logs pages newest-first by id (keyset cursor).
+/admin/stats runs its aggregates concurrently (one session each) and returns the
+current and previous window, a zero-filled time series (1h/3h/6h/12h/1d buckets,
+<= 48 points), status mix and a latency histogram of upstream-served requests.
 Tables created with metadata.create_all on startup (no Alembic).
 
 ## Folder structure
@@ -131,6 +135,7 @@ tollgate/
 │   │   ├── db/
 │   │   │   ├── session.py
 │   │   │   ├── models.py
+│   │   │   ├── analytics.py   # stats aggregates: totals, histogram, status mix, time series
 │   │   │   └── queries.py
 │   │   └── logging_queue.py   # RequestRecord -> LogEvent buffer, 2s batch flusher
 │   ├── tests/

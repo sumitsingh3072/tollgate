@@ -1,11 +1,10 @@
-"""Admin queries: keys CRUD, stats (p50/p95), paginated logs. Phases 2 and 4."""
+"""Admin queries: keys CRUD and paginated logs. Aggregates live in app/db/analytics.py."""
 
-import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ApiKey, RequestLog
@@ -41,107 +40,7 @@ async def revoke_key(session: AsyncSession, key_id: uuid.UUID) -> ApiKey | None:
     return key
 
 
-# --- analytics ----------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Totals:
-    requests: int
-    errors: int
-    cache_hits: int
-    fallbacks: int
-    in_tokens: int
-    out_tokens: int
-    p50_latency_ms: float | None
-    p95_latency_ms: float | None
-
-
-@dataclass(frozen=True)
-class KeyUsageRow:
-    key_id: uuid.UUID | None
-    name: str | None
-    prefix: str | None
-    requests: int
-    tokens: int
-    errors: int
-
-
-@dataclass(frozen=True)
-class ModelUsageRow:
-    model: str | None
-    requests: int
-    tokens: int
-
-
-_ERRORS = RequestLog.status >= 400
-_TOKENS = RequestLog.in_tokens + RequestLog.out_tokens
-
-
-def _percentile(sorted_values: list[int], q: float) -> float | None:
-    """Linear interpolation, identical to Postgres percentile_cont."""
-    if not sorted_values:
-        return None
-    pos = (len(sorted_values) - 1) * q
-    lower, upper = math.floor(pos), math.ceil(pos)
-    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (pos - lower)
-
-
-async def _latency_percentiles(session: AsyncSession, since: datetime) -> tuple[float | None, float | None]:
-    window = RequestLog.ts >= since
-    if session.bind.dialect.name == "postgresql":
-        latency = RequestLog.latency_ms.asc()
-        row = (
-            await session.execute(
-                select(
-                    func.percentile_cont(0.5).within_group(latency),
-                    func.percentile_cont(0.95).within_group(latency),
-                ).where(window)
-            )
-        ).one()
-        return row[0], row[1]
-    # Other dialects (SQLite in tests) lack percentile_cont; compute the same thing in Python.
-    values = sorted((await session.scalars(select(RequestLog.latency_ms).where(window))).all())
-    return _percentile(values, 0.5), _percentile(values, 0.95)
-
-
-async def totals(session: AsyncSession, since: datetime) -> Totals:
-    row = (
-        await session.execute(
-            select(
-                func.count(),
-                func.count().filter(_ERRORS),
-                func.count().filter(RequestLog.cache_hit.is_(True)),
-                func.count().filter(RequestLog.fallback_used.is_(True)),
-                func.coalesce(func.sum(RequestLog.in_tokens), 0),
-                func.coalesce(func.sum(RequestLog.out_tokens), 0),
-            ).where(RequestLog.ts >= since)
-        )
-    ).one()
-    p50, p95 = await _latency_percentiles(session, since)
-    return Totals(*(int(v) for v in row), p50_latency_ms=p50, p95_latency_ms=p95)
-
-
-async def usage_by_key(session: AsyncSession, since: datetime) -> list[KeyUsageRow]:
-    tokens = func.coalesce(func.sum(_TOKENS), 0)
-    result = await session.execute(
-        select(RequestLog.key_id, ApiKey.name, ApiKey.prefix, func.count(), tokens, func.count().filter(_ERRORS))
-        .outerjoin(ApiKey, ApiKey.id == RequestLog.key_id)
-        .where(RequestLog.ts >= since)
-        .group_by(RequestLog.key_id, ApiKey.name, ApiKey.prefix)
-        .order_by(tokens.desc())
-    )
-    return [KeyUsageRow(*row) for row in result.all()]
-
-
-async def usage_by_model(session: AsyncSession, since: datetime) -> list[ModelUsageRow]:
-    tokens = func.coalesce(func.sum(_TOKENS), 0)
-    result = await session.execute(
-        select(RequestLog.model_used, func.count(), tokens)
-        .where(RequestLog.ts >= since)
-        .group_by(RequestLog.model_used)
-        .order_by(func.count().desc())
-    )
-    return [ModelUsageRow(*row) for row in result.all()]
+# --- logs -----------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -171,6 +70,6 @@ async def list_logs(
     if filters.status is not None:
         query = query.where(RequestLog.status == filters.status)
     if filters.errors_only:
-        query = query.where(_ERRORS)
+        query = query.where(RequestLog.status >= 400)
     result = await session.execute(query)
     return [(row[0], row[1], row[2]) for row in result.all()]

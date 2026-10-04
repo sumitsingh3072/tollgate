@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 
 from app.config import Settings
+from app.db.analytics import percentile as _percentile
 from app.db.models import RequestLog
-from app.db.queries import _percentile
 from app.logging_queue import LogEvent, LogQueue
 from tests.conftest import ADMIN_HEADERS
 
@@ -114,7 +114,7 @@ async def test_stats_aggregate(client, app: FastAPI, create_key) -> None:
     assert stats["by_key"] == [
         {"key_id": key["id"], "name": "team-a", "prefix": key["prefix"], "requests": 8, "tokens": 50, "errors": 1}
     ]
-    assert {m["model"]: m["requests"] for m in stats["by_model"]} == {"m": 7, "other": 1}
+    assert {m["name"]: m["requests"] for m in stats["by_model"]} == {"m": 7, "other": 1}
 
     wide = (await client.get("/admin/stats?hours=168", headers=ADMIN_HEADERS)).json()
     assert wide["requests"] == 9

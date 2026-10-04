@@ -24,10 +24,15 @@ export type KeyUsage = {
   errors: number;
 };
 
-export type ModelUsage = { model: string | null; requests: number; tokens: number };
+export type GroupUsage = {
+  name: string | null;
+  requests: number;
+  tokens: number;
+  errors: number;
+  avg_latency_ms: number | null;
+};
 
-export type Stats = {
-  window_hours: number;
+export type PeriodTotals = {
   requests: number;
   errors: number;
   error_rate: number;
@@ -38,9 +43,36 @@ export type Stats = {
   out_tokens: number;
   p50_latency_ms: number | null;
   p95_latency_ms: number | null;
-  by_key: KeyUsage[];
-  by_model: ModelUsage[];
 };
+
+export type SeriesPoint = {
+  ts: string;
+  requests: number;
+  errors: number;
+  cache_hits: number;
+  fallbacks: number;
+  in_tokens: number;
+  out_tokens: number;
+  avg_latency_ms: number | null;
+};
+
+export type StatusMix = { success: number; client_errors: number; rate_limited: number; server_errors: number };
+
+export type LatencyBin = { lower_ms: number; upper_ms: number | null; count: number };
+
+export type Stats = PeriodTotals & {
+  window_hours: number;
+  previous: PeriodTotals;
+  status_mix: StatusMix;
+  latency_histogram: LatencyBin[];
+  bucket_seconds: number;
+  series: SeriesPoint[];
+  by_key: KeyUsage[];
+  by_alias: GroupUsage[];
+  by_model: GroupUsage[];
+};
+
+export type ActivityDay = { date: string; requests: number; tokens: number; errors: number };
 
 export type RequestLog = {
   id: number;

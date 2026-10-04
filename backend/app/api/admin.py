@@ -3,15 +3,30 @@
 import logging
 import uuid
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core import keys, limits
-from app.db import queries
+from app.db import analytics, queries
 from app.deps import require_admin
 from app.errors import GatewayError
-from app.schemas import AliasOut, KeyCreate, KeyCreated, KeyOut, KeyUsage, LogOut, LogPage, ModelUsage, Stats
+from app.schemas import (
+    ActivityDay,
+    AliasOut,
+    GroupUsage,
+    KeyCreate,
+    KeyCreated,
+    KeyOut,
+    KeyUsage,
+    LatencyBin,
+    LogOut,
+    LogPage,
+    PeriodTotals,
+    SeriesPoint,
+    Stats,
+    StatusMix,
+)
 
 log = logging.getLogger("tollgate.admin")
 
@@ -61,21 +76,64 @@ def _rate(part: int, whole: int) -> float:
     return round(part / whole, 4) if whole else 0.0
 
 
+def _period(t: analytics.Totals) -> dict[str, Any]:
+    return {
+        "requests": t.requests,
+        "errors": t.errors,
+        "error_rate": _rate(t.errors, t.requests),
+        "cache_hits": t.cache_hits,
+        "cache_hit_rate": _rate(t.cache_hits, t.requests),
+        "fallbacks": t.fallbacks,
+        "in_tokens": t.in_tokens,
+        "out_tokens": t.out_tokens,
+        "p50_latency_ms": t.p50_latency_ms,
+        "p95_latency_ms": t.p95_latency_ms,
+    }
+
+
+def _histogram(counts: list[int]) -> list[LatencyBin]:
+    bounds = (0, *analytics.LATENCY_BINS_MS)
+    uppers = (*analytics.LATENCY_BINS_MS, None)
+    return [LatencyBin(lower_ms=lo, upper_ms=hi, count=n) for lo, hi, n in zip(bounds, uppers, counts, strict=True)]
+
+
 @router.get("/stats")
 async def stats(request: Request, hours: int = Query(default=24, ge=1, le=24 * 30)) -> Stats:
-    since = datetime.now(UTC) - timedelta(hours=hours)
-    async with request.app.state.sessionmaker() as session:
-        totals = await queries.totals(session, since)
-        by_key = await queries.usage_by_key(session, since)
-        by_model = await queries.usage_by_model(session, since)
-    return Stats(
-        window_hours=hours,
-        error_rate=_rate(totals.errors, totals.requests),
-        cache_hit_rate=_rate(totals.cache_hits, totals.requests),
-        by_key=[KeyUsage(**asdict(row)) for row in by_key],
-        by_model=[ModelUsage(**asdict(row)) for row in by_model],
-        **asdict(totals),
+    window = analytics.Window.last(hours)
+    bucket = analytics.bucket_seconds(window)
+    current, previous, series, by_key, by_alias, by_model = await analytics.run_concurrently(
+        request.app.state.sessionmaker,
+        lambda s: analytics.totals(s, window),
+        lambda s: analytics.totals(s, window.previous()),
+        lambda s: analytics.timeseries(s, window, bucket),
+        lambda s: analytics.usage_by_key(s, window),
+        lambda s: analytics.usage_by_alias(s, window),
+        lambda s: analytics.usage_by_model(s, window),
     )
+    return Stats(
+        **_period(current),
+        window_hours=hours,
+        previous=PeriodTotals(**_period(previous)),
+        status_mix=StatusMix(**asdict(current.status_mix)),
+        latency_histogram=_histogram(current.latency_histogram),
+        bucket_seconds=bucket,
+        series=[SeriesPoint(**asdict(p)) for p in series],
+        by_key=[KeyUsage(**asdict(row)) for row in by_key],
+        by_alias=[GroupUsage(**asdict(row)) for row in by_alias],
+        by_model=[GroupUsage(**asdict(row)) for row in by_model],
+    )
+
+
+@router.get("/activity")
+async def activity(request: Request, days: int = Query(default=365, ge=7, le=366)) -> list[ActivityDay]:
+    """Daily totals (UTC) for a contribution-style heatmap; days with no traffic are included as zeros."""
+    window = analytics.Window.last(days * 24)
+    async with request.app.state.sessionmaker() as session:
+        points = await analytics.timeseries(session, window, analytics.DAY_SECONDS)
+    return [
+        ActivityDay(date=f"{p.ts:%Y-%m-%d}", requests=p.requests, tokens=p.in_tokens + p.out_tokens, errors=p.errors)
+        for p in points
+    ]
 
 
 @router.get("/logs")

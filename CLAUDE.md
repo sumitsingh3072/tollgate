@@ -19,6 +19,7 @@ cd backend && uv venv -p 3.12 .venv && uv pip install -r requirements-dev.txt
 cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
 cd backend && .venv/bin/python mock_upstream.py   # :9000, always 500
 cd backend && .venv/bin/python scripts/smoke_openai.py --model fast   # SDK end-to-end
+cd backend && .venv/bin/python -m scripts.seed_demo --database-url <local-db-url>   # demo data (never prod)
 cd frontend && cp .env.example .env.local && pnpm dev   # :3000
 cd backend && .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 cd frontend && pnpm lint && pnpm build
