@@ -42,13 +42,21 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def make_app(settings: Settings) -> Callable[..., FastAPI]:
-    """Build an app with fake redis/db on app.state (no lifespan, no network)."""
+async def http() -> AsyncIterator[httpx.AsyncClient]:
+    """The shared upstream client; tests intercept it with respx."""
+    async with httpx.AsyncClient() as client:
+        yield client
+
+
+@pytest.fixture
+def make_app(settings: Settings, http: httpx.AsyncClient) -> Callable[..., FastAPI]:
+    """Build an app with fake redis/db on app.state (no lifespan, no real network)."""
 
     def _make(redis_up: bool = True, db_up: bool = True) -> FastAPI:
         app = create_app(settings, use_lifespan=False)
         app.state.redis = FakeRedis(redis_up)
         app.state.engine = FakeEngine(db_up)
+        app.state.http = http
         return app
 
     return _make

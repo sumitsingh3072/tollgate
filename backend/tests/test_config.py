@@ -27,3 +27,11 @@ def test_cors_origins_from_comma_string() -> None:
 def test_base_url_trailing_slash_stripped() -> None:
     s = Settings(_env_file=None, gemini_base_url="https://x.test/v1beta/openai/")
     assert s.gemini_base_url == "https://x.test/v1beta/openai"
+
+
+def test_thinking_level_default_and_disable(settings: Settings) -> None:
+    params = build_aliases(settings)["fast"].chain[0].default_params
+    assert params == {"extra_body": {"google": {"thinking_config": {"thinking_level": "minimal"}}}}
+
+    off = Settings(_env_file=None, gemini_thinking_level="")
+    assert build_aliases(off)["fast"].chain[0].default_params == {}

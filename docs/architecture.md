@@ -51,7 +51,11 @@ flowchart LR
    (alias, messages, temperature, max_tokens). Hit -> return, header
    x-tollgate-cache: hit.
 5. Forward: try each upstream in order (POST {base_url}/chat/completions with
-   Authorization: Bearer {upstream.api_key}, model rewritten to the upstream id), skipping any with an open circuit
+   Authorization: Bearer {upstream.api_key}, model rewritten to the upstream id,
+   upstream.default_params deep-merged under the client body; for Gemma this
+   sets extra_body.google.thinking_config.thinking_level=minimal). The client's
+   Authorization header is never forwarded. Streams check the upstream status
+   before sending headers, so failures return a normal JSON error., skipping any with an open circuit
    breaker. On connect error, timeout, or 5xx -> record failure, try next.
    Breaker: 3 consecutive failures -> open for 30s.
 6. Stream: relay SSE chunks unchanged via StreamingResponse. Request
@@ -92,6 +96,7 @@ tollgate/
 │   │   ├── config.py          # Settings + build_aliases (Gemma chains)
 │   │   ├── deps.py            # auth + admin-token dependencies
 │   │   ├── errors.py          # GatewayError + OpenAI-style error handlers
+│   │   ├── schemas.py         # ChatCompletionRequest (extra fields pass through), model list
 │   │   ├── logging_setup.py   # console/JSON formatters, request-id contextvar
 │   │   ├── middleware.py      # request id + access log (pure ASGI)
 │   │   ├── api/
@@ -110,6 +115,7 @@ tollgate/
 │   │   └── logging_queue.py
 │   ├── tests/
 │   ├── mock_upstream.py
+│   ├── scripts/smoke_openai.py  # OpenAI SDK end-to-end check against a running gateway
 │   ├── requirements.txt       # runtime pins
 │   ├── requirements-dev.txt   # + pytest, respx, ruff
 │   ├── pyproject.toml         # ruff + pytest config

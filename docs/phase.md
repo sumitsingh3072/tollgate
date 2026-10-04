@@ -34,15 +34,19 @@ Done when: pytest + ruff pass, `pnpm lint && pnpm build` pass,
 and /health shows redis and db true.
 
 ## Phase 1: Streaming proxy (Gemma via Gemini API)
-- [ ] POST /v1/chat/completions forwards to the first model in the alias chain
+- [x] POST /v1/chat/completions forwards to the first model in the alias chain
       (Bearer upstream.api_key, model rewritten to the Gemma model id)
-- [ ] Request schema: validate messages/model, pass unknown OpenAI fields through
-- [ ] stream=true relays SSE chunks via StreamingResponse; request
+- [x] Request schema: validate messages/model, pass unknown OpenAI fields through
+- [x] stream=true relays SSE chunks via StreamingResponse; request
       stream_options.include_usage
-- [ ] Upstream 4xx/5xx mapped to the OpenAI error envelope; unknown alias -> 404
-- [ ] GET /v1/models lists aliases (OpenAI list shape)
-- [ ] Log one line per upstream call (alias, model, status, latency_ms)
-- [ ] respx tests: non-stream, stream chunk-by-chunk, upstream error mapping
+- [x] Upstream 4xx/5xx mapped to the OpenAI error envelope (incl. Gemini's
+      list-shaped errors); unknown alias -> 404 model_not_found
+- [x] GET /v1/models lists aliases (OpenAI list shape); GET /v1/models/{id}
+- [x] Log one line per upstream call (alias, model, status, latency_ms)
+- [x] respx tests: non-stream, stream chunk-by-chunk, upstream error mapping
+- [x] Gemma thinking off by default (GEMINI_THINKING_LEVEL=minimal) so no
+      <thought> text leaks into content; client extra_body overrides
+- [x] scripts/smoke_openai.py: OpenAI SDK end-to-end check
 Done when: OpenAI Python SDK works with only base_url changed, streaming included.
 
 ## Phase 2: Keys and limits

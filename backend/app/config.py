@@ -1,8 +1,9 @@
 """Settings (from env / .env) and model alias chains."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import SecretStr, field_validator
@@ -26,6 +27,9 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_fast_model: str = "gemma-4-26b-a4b-it"
     gemini_smart_model: str = "gemma-4-31b-it"
+    # Gemma thinks by default and inlines <thought>...</thought> into content; "minimal" turns that off.
+    # Empty string leaves the model default. Clients can override per request via extra_body.
+    gemini_thinking_level: Literal["minimal", "high", ""] = "minimal"
     mock_upstream_url: str = "http://localhost:9000/v1"
 
     admin_token: SecretStr = SecretStr(DEFAULT_ADMIN_TOKEN)
@@ -84,11 +88,15 @@ def get_settings() -> Settings:
 
 @dataclass(frozen=True)
 class Upstream:
-    """One OpenAI-compatible endpoint + model. api_key is kept out of repr/logs."""
+    """One OpenAI-compatible endpoint + model. api_key is kept out of repr/logs.
+
+    default_params are deep-merged under the client's request body (client values win).
+    """
 
     model: str
     base_url: str
     api_key: str = field(default="", repr=False)
+    default_params: Mapping[str, Any] = field(default_factory=dict, hash=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -99,11 +107,19 @@ class Alias:
 
 def build_aliases(settings: Settings) -> dict[str, Alias]:
     key = settings.gemini_api_key.get_secret_value()
-    fast = Upstream(settings.gemini_fast_model, settings.gemini_base_url, key)
-    smart = Upstream(settings.gemini_smart_model, settings.gemini_base_url, key)
+    params = _gemini_params(settings)
+    fast = Upstream(settings.gemini_fast_model, settings.gemini_base_url, key, params)
+    smart = Upstream(settings.gemini_smart_model, settings.gemini_base_url, key, params)
     smart_chain = (smart, fast)
     return {
         "fast": Alias(chain=(fast,)),
         "smart": Alias(chain=smart_chain),
         "smart-terse": Alias(chain=smart_chain, terse=True),
     }
+
+
+def _gemini_params(settings: Settings) -> dict[str, Any]:
+    if not settings.gemini_thinking_level:
+        return {}
+    # Gemini's OpenAI-compat layer reads vendor options from a literal "extra_body" JSON field.
+    return {"extra_body": {"google": {"thinking_config": {"thinking_level": settings.gemini_thinking_level}}}}
