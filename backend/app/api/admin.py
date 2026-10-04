@@ -1,11 +1,13 @@
 """Control plane: /admin/keys, /admin/stats, /admin/logs. Phases 2 and 4."""
 
+import asyncio
 import logging
 import uuid
 from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from redis.exceptions import ResponseError
 
 from app.config import Settings
 from app.core import keys, limits
@@ -16,6 +18,7 @@ from app.errors import GatewayError
 from app.schemas import (
     ActivityDay,
     AliasOut,
+    CacheStats,
     CoalesceStats,
     Fairness,
     GroupUsage,
@@ -136,7 +139,7 @@ async def stats(
 ) -> Stats:
     window = analytics.Window.last(hours, owner_id=scope.owner_id)
     bucket = analytics.bucket_seconds(window)
-    current, previous, series, by_key, by_alias, by_model = await analytics.run_concurrently(
+    current, previous, series, by_key, by_alias, by_model, ttft, roles = await analytics.run_concurrently(
         request.app.state.sessionmaker,
         lambda s: analytics.totals(s, window),
         lambda s: analytics.totals(s, window.previous()),
@@ -144,10 +147,15 @@ async def stats(
         lambda s: analytics.usage_by_key(s, window),
         lambda s: analytics.usage_by_alias(s, window),
         lambda s: analytics.usage_by_model(s, window),
+        lambda s: analytics.ttft_percentiles(s, window),
+        lambda s: analytics.counts_by(s, window, RequestLog.coalesce_role),
     )
     return Stats(
         **_period(current),
         window_hours=hours,
+        p50_ttft_ms=ttft[0],
+        p95_ttft_ms=ttft[1],
+        coalesced=roles.get("follower", 0),
         previous=PeriodTotals(**_period(previous)),
         status_mix=StatusMix(**asdict(current.status_mix)),
         latency_histogram=_histogram(current.latency_histogram),
@@ -156,6 +164,57 @@ async def stats(
         by_key=[KeyUsage(**asdict(row)) for row in by_key],
         by_alias=[GroupUsage(**asdict(row)) for row in by_alias],
         by_model=[GroupUsage(**asdict(row)) for row in by_model],
+    )
+
+
+async def _redis_info(redis: Any, section: str) -> dict[str, Any]:
+    """INFO (not CONFIG, which managed Redis services often disable) carries memory and policy.
+    Degrades to {} where INFO is unavailable."""
+    try:
+        return await redis.info(section)
+    except ResponseError:
+        return {}
+
+
+async def _count_keys(redis: Any, pattern: str, limit: int = 200_000) -> int:
+    count = 0
+    async for _ in redis.scan_iter(match=pattern, count=1000):
+        count += 1
+        if count >= limit:
+            break
+    return count
+
+
+@router.get("/cache/stats")
+async def cache_stats(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> CacheStats:
+    state = request.app.state
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    async with state.sessionmaker() as session:
+        statuses = await analytics.counts_by(session, window, RequestLog.cache_status)
+    redis_cache = state.redis_cache
+    memory, stats = await asyncio.gather(_redis_info(redis_cache, "memory"), _redis_info(redis_cache, "stats"))
+    entries, seen = await asyncio.gather(_count_keys(redis_cache, "cache:*"), _count_keys(redis_cache, "seen:*"))
+    hits = statuses.get("hit", 0)
+    eligible = hits + statuses.get("miss", 0) + statuses.get("admission_rejected", 0)
+    used = int(memory.get("used_memory", 0))
+    return CacheStats(
+        window_hours=hours,
+        requests=sum(statuses.values()),
+        statuses={k or "unknown": v for k, v in statuses.items()},
+        hit_rate=_rate(hits, eligible),
+        admission_rejected=statuses.get("admission_rejected", 0),
+        entries=entries,
+        seen_markers=seen,
+        used_memory_bytes=used,
+        max_memory_bytes=int(memory.get("maxmemory", 0)),
+        eviction_policy=str(memory.get("maxmemory_policy", "unknown")),
+        evicted_keys=int(stats.get("evicted_keys", 0)),
+        hits_per_mb=round(hits / (used / 1_048_576), 2) if used else None,
+        separate_instance=redis_cache is not state.redis,
     )
 
 

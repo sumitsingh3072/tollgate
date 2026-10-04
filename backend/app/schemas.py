@@ -131,6 +131,9 @@ class SeriesPoint(BaseModel):
 
 class Stats(PeriodTotals):
     window_hours: int
+    p50_ttft_ms: float | None = Field(description="Time to first token (streams)")
+    p95_ttft_ms: float | None
+    coalesced: int = Field(description="Requests served by another request's upstream call (calls saved)")
     previous: PeriodTotals = Field(description="Same-length window immediately before this one")
     status_mix: StatusMix
     latency_histogram: list[LatencyBin] = Field(description="Upstream-served requests only")
@@ -232,3 +235,19 @@ class Fairness(BaseModel):
     jain_index: float | None = Field(description="Over tokens served per key; 1.0 = perfectly even")
     keys: list[KeyFairness]
     models: list[ModelQueue]
+
+
+class CacheStats(BaseModel):
+    window_hours: int
+    requests: int
+    statuses: dict[str, int] = Field(description="Requests per cache_status in the window")
+    hit_rate: float = Field(description="hits / cache-eligible requests (hit + miss + admission_rejected)")
+    admission_rejected: int
+    entries: int = Field(description="Cached responses currently stored")
+    seen_markers: int = Field(description="First-sighting markers (admission ghosts)")
+    used_memory_bytes: int
+    max_memory_bytes: int = Field(description="0 = no limit (cache shares the state Redis)")
+    eviction_policy: str
+    evicted_keys: int = Field(description="Since the cache Redis started")
+    hits_per_mb: float | None
+    separate_instance: bool

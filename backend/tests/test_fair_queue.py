@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from app.config import Settings
+from app.config import Settings, Upstream
 from app.core.fair_queue import FairQueue, FairScheduler, VirtualCounters
 from app.errors import GatewayError
 
@@ -204,3 +204,43 @@ async def test_fairness_endpoint(make_app, settings, create_key, gpu) -> None:
     assert by_name["a"]["queue_wait_p95_ms"] is not None and by_name["a"]["virtual_tokens"] > 0
     assert abs(data["jain_index"] - 0.8) < 1e-6
     assert data["models"] == [{"model": settings.gemini_fast_model, "parallel": 1, "running": 0, "queued": 0}]
+
+
+async def test_queue_rejections_never_open_the_circuit(make_app, settings, create_key, gpu) -> None:
+    """Gateway backpressure must not be mistaken for an unhealthy model."""
+    settings.upstream_max_parallel = 1
+    settings.fair_max_queue_per_key = 1
+    key = await create_key(rpm=1000)
+    app = make_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        auth = {"Authorization": f"Bearer {key['key']}"}
+        results = await asyncio.gather(
+            *(
+                c.post(
+                    "/v1/chat/completions",
+                    json={"model": "fast", "messages": [{"role": "user", "content": f"q{i}"}]},
+                    headers=auth,
+                )
+                for i in range(8)
+            )
+        )
+    assert sum(r.status_code == 429 for r in results) >= 5
+    assert app.state.breakers.allows(Upstream(settings.gemini_fast_model, settings.gemini_base_url))
+
+
+async def test_queue_timeout_falls_back_without_opening_breaker() -> None:
+    from app.core import fallback
+    from app.core.fallback import CircuitBreakers
+
+    breakers = CircuitBreakers(1, 30.0)
+    busy, spare = Upstream("busy", "http://up"), Upstream("spare", "http://up")
+
+    async def attempt(upstream: Upstream) -> str:
+        if upstream is busy:
+            raise GatewayError(429, "queue_timeout", "saturated")
+        return upstream.model
+
+    result = await fallback.run_chain("smart", (busy, spare), breakers, attempt)
+    assert result.value == "spare" and result.fallback_used
+    assert breakers.allows(busy)

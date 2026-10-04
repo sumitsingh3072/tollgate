@@ -61,6 +61,11 @@ function Flags({ log }: { log: RequestLog }) {
           {cacheLabel}
         </Badge>
       )}
+      {log.coalesce_role === "follower" && (
+        <Badge variant="outline" title="Shared another request's model call">
+          coalesced
+        </Badge>
+      )}
       {log.fallback_used && <Badge className="bg-chart-3/15 text-chart-3">fallback</Badge>}
       {log.tags &&
         Object.entries(log.tags).map(([k, v]) => (
@@ -105,6 +110,9 @@ export async function LogsTable({ filters, before }: { filters: LogFilterValues;
               <TableHead className="text-right">Tokens in / out</TableHead>
               <TableHead className="text-right">Latency</TableHead>
               <TableHead className="text-right">TTFT</TableHead>
+              <TableHead className="text-right" title="Time waiting for a model slot">
+                Queue
+              </TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -127,6 +135,9 @@ export async function LogsTable({ filters, before }: { filters: LogFilterValues;
                 <TableCell className="text-right tabular-nums">{formatLatency(log.latency_ms)}</TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
                   {log.ttft_ms === null ? "—" : formatLatency(log.ttft_ms)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {log.queue_wait_ms ? formatLatency(log.queue_wait_ms) : "—"}
                 </TableCell>
                 <TableCell>
                   <Flags log={log} />

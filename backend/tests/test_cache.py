@@ -196,3 +196,22 @@ def test_eligibility_rules() -> None:
 async def test_admission_marker(redis: FakeAsyncRedis) -> None:
     assert await cache.admit(redis, "cache:x", 60) is False
     assert await cache.admit(redis, "cache:x", 60) is True
+
+
+async def test_cache_stats_endpoint(client, auth, app, gemini) -> None:
+    gemini.mock(return_value=httpx.Response(200, json=completion()))
+    for _ in range(3):
+        await ask(client, auth)  # rejected, stored, hit
+    await ask(client, auth, temperature=0.5)  # ineligible
+    await app.state.log_queue.flush()
+
+    stats = (await client.get("/admin/cache/stats", headers={"Authorization": "Bearer test-admin"})).json()
+
+    assert stats["statuses"] == {"admission_rejected": 1, "miss": 1, "hit": 1, "ineligible": 1}
+    assert stats["hit_rate"] == round(1 / 3, 4) and stats["admission_rejected"] == 1
+    assert (stats["entries"], stats["seen_markers"]) == (1, 1)
+    # fakeredis has no INFO: memory figures degrade to 0 (real Redis reports them).
+    assert stats["used_memory_bytes"] >= 0 and stats["separate_instance"] is False
+
+    overview = (await client.get("/admin/stats", headers={"Authorization": "Bearer test-admin"})).json()
+    assert overview["coalesced"] == 0 and "p50_ttft_ms" in overview

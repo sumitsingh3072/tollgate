@@ -157,8 +157,9 @@ class _Context:
 
     @property
     def fallback_timeout(self) -> float | None:
-        """Deadline for attempts that still have a fallback. It includes fair-queue waiting, so a
-        saturated model falls back just like a slow one."""
+        """Deadline for the upstream call of attempts that still have a fallback. Fair-queue waiting
+        is excluded (a saturated model falls back via queue_timeout instead, without being treated
+        as unhealthy)."""
         return self.state.settings.fallback_timeout or None
 
     def waited(self, flight: Flight, ticket: Ticket | None) -> None:
@@ -184,11 +185,15 @@ async def _complete(ctx: _Context) -> JSONResponse:
             async with queue.slot(upstream.model, ctx.key_id, ctx.key.prefix) as ticket:
                 ctx.waited(flight, ticket)
                 queue.charge(ctx.key_id, input_tokens=usage.estimate_tokens(ctx.prompt))
-                value = await proxy.complete(state.http, record.alias, upstream, payload)
+                value = await fallback.with_deadline(
+                    lambda: proxy.complete(state.http, record.alias, upstream, payload), upstream
+                )
                 queue.charge(ctx.key_id, output_tokens=usage.from_completion(value, ctx.prompt).completion_tokens)
                 return value
 
-        result = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, call, ctx.fallback_timeout)
+        result = await fallback.run_chain(
+            record.alias, ctx.alias.chain, state.breakers, call, ctx.fallback_timeout, attempt_applies_deadline=True
+        )
         flight.set_meta(result.upstream.model, result.fallback_used)
         if ctx.key_for_cache:
             flight.cache_status = await _store(ctx, result.upstream.model, result.value, flight)
@@ -219,7 +224,7 @@ async def _store(ctx: _Context, model: str, body: dict[str, Any] | None, flight:
     encoded = cache.encode_if_eligible(model, body, settings.cache_max_entry_bytes) if body else None
     if encoded is None:
         return "ineligible"
-    popular = flight.followers >= 2
+    popular = flight.followers >= 2 or settings.cache_admission == "always"
     if not popular and not await cache.admit(state.redis_cache, key_for_cache, settings.cache_seen_ttl):
         return "admission_rejected"
     if policy.scope == "shared" and not await cache.within_insert_budget(
@@ -242,13 +247,18 @@ async def _stream(ctx: _Context) -> StreamingResponse:
             ctx.waited(flight, ticket)
             queue.charge(ctx.key_id, input_tokens=usage.estimate_tokens(ctx.prompt))
             try:
-                return await proxy.open_stream(state.http, record.alias, upstream, payload), ticket
+                opened = await fallback.with_deadline(
+                    lambda: proxy.open_stream(state.http, record.alias, upstream, payload), upstream
+                )
+                return opened, ticket
             except BaseException:
                 queue.release(upstream.model, ticket)
                 raise
 
         # Fallback is possible until the first byte: open_stream checks the upstream status first.
-        streamed = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, open_, ctx.fallback_timeout)
+        streamed = await fallback.run_chain(
+            record.alias, ctx.alias.chain, state.breakers, open_, ctx.fallback_timeout, attempt_applies_deadline=True
+        )
         chunks, ticket = streamed.value
         flight.set_meta(streamed.upstream.model, streamed.fallback_used)
         meter = usage.SSEUsageTracker(ctx.prompt)

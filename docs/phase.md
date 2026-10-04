@@ -177,12 +177,15 @@ Spec: "Every token pays the toll": avoid repeated work, share capacity fairly, p
 - [x] FAIR_QUEUE_MODE=fair|fifo|off for benchmarking
 
 ## Phase 11: Shared cache, stream caching, dashboard pages, benchmarks
-- [ ] Shared scope (opt-in per route) with per-key insert budgets; hide x-tollgate-cache there
-- [ ] Cache streamed responses (collect chunks) and replay hits as SSE
-- [ ] /admin/cache/stats (hit rate, memory vs limit, evictions, rejections, hits per MB)
-- [ ] Dashboard: Cache and Fairness pages; coalescing cards on Overview; TTFT on Overview
-- [ ] Mock upstream success mode; bench/ workload (Zipf + one-hit wonders), cache_bench,
-      coalesce_bench, fair_bench; publish measured results only
+- [x] Shared scope (opt-in, "faq" alias) with per-key insert budgets; cache/coalesce headers hidden
+- [x] Cache streamed responses (rebuilt into one completion) and replay hits as SSE or JSON
+- [x] /admin/cache/stats (hit rate, memory vs limit, evictions, rejections, entries, hits per MB)
+- [x] Dashboard: Cache and Fairness (live) pages; Overview TTFT and "model calls saved" tiles;
+      Logs show coalescing and queue wait
+- [x] bench/: in-process harness with a simulated model, Zipf + one-off workload, cache_bench,
+      coalesce_bench, fair_bench; measured results in docs/benchmarks.md
+- [x] Fix found by the benchmarks: gateway queue rejections no longer count as upstream failures
+      (circuit breaker), and the fallback deadline covers the upstream call, not queue waiting
 
 ## Phase 12: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build

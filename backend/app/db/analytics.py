@@ -121,20 +121,30 @@ def percentile(sorted_values: list[int], q: float) -> float | None:
     return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (pos - lower)
 
 
-async def _latency_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+async def _percentiles(session: AsyncSession, column: Any, where: Any) -> tuple[float | None, float | None]:
+    """p50 and p95 of a column (Postgres percentile_cont; computed in Python elsewhere)."""
     if _is_postgres(session):
-        latency = RequestLog.latency_ms.asc()
+        ordered = column.asc()
         row = (
             await session.execute(
                 select(
-                    func.percentile_cont(0.5).within_group(latency),
-                    func.percentile_cont(0.95).within_group(latency),
-                ).where(window.where())
+                    func.percentile_cont(0.5).within_group(ordered),
+                    func.percentile_cont(0.95).within_group(ordered),
+                ).where(where)
             )
         ).one()
         return row[0], row[1]
-    values = sorted((await session.scalars(select(RequestLog.latency_ms).where(window.where()))).all())
+    values = sorted((await session.scalars(select(column).where(where))).all())
     return percentile(values, 0.5), percentile(values, 0.95)
+
+
+async def _latency_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+    return await _percentiles(session, RequestLog.latency_ms, window.where())
+
+
+async def ttft_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+    """Time to first token, over streams that produced content."""
+    return await _percentiles(session, RequestLog.ttft_ms, window.where() & RequestLog.ttft_ms.is_not(None))
 
 
 def _histogram_columns() -> list[Any]:

@@ -69,6 +69,9 @@ export type LatencyBin = { lower_ms: number; upper_ms: number | null; count: num
 
 export type Stats = PeriodTotals & {
   window_hours: number;
+  p50_ttft_ms: number | null;
+  p95_ttft_ms: number | null;
+  coalesced: number;
   previous: PeriodTotals;
   status_mix: StatusMix;
   latency_histogram: LatencyBin[];
@@ -109,3 +112,53 @@ export type AliasInfo = { id: string; chain: string[]; terse: boolean };
 
 export type UserLimits = { max_keys: number; max_rpm: number; max_daily_tokens: number };
 export type Me = { owner_id: string | null; active_keys: number; limits: UserLimits | null };
+
+export type CacheStats = {
+  window_hours: number;
+  requests: number;
+  statuses: Record<string, number>;
+  hit_rate: number;
+  admission_rejected: number;
+  entries: number;
+  seen_markers: number;
+  used_memory_bytes: number;
+  max_memory_bytes: number;
+  eviction_policy: string;
+  evicted_keys: number;
+  hits_per_mb: number | null;
+  separate_instance: boolean;
+};
+
+export type CoalesceStats = {
+  window_hours: number;
+  leaders: number;
+  followers: number;
+  calls_saved: number;
+  share_rate: number;
+  in_flight: number;
+  largest_fanout_since_start: number;
+  flights_since_start: number;
+};
+
+export type KeyFairness = {
+  key_id: string | null;
+  name: string | null;
+  prefix: string | null;
+  requests: number;
+  tokens: number;
+  share: number;
+  queue_wait_p95_ms: number | null;
+  queue_wait_avg_ms: number | null;
+  queued_now: number;
+  virtual_tokens: number;
+};
+
+export type ModelQueue = { model: string; parallel: number; running: number; queued: number };
+
+export type Fairness = {
+  window_hours: number;
+  mode: "fair" | "fifo" | "off";
+  jain_index: number | null;
+  keys: KeyFairness[];
+  models: ModelQueue[];
+};

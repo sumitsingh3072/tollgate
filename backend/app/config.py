@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     cache_ttl: int = 86_400  # per-route default; stale answers expire even when popular
     cache_max_entry_bytes: int = 16_384
     cache_seen_ttl: int = 3_600  # second-sight admission window
+    # "second_sight" (default) or "always" (naive baseline, for benchmarks).
+    cache_admission: Literal["second_sight", "always"] = "second_sight"
     cache_insert_budget_per_min: int = 30  # shared scope: new entries per key per minute
     # Identical in-flight requests share one upstream call (per process: run one worker).
     coalescing_enabled: bool = True
