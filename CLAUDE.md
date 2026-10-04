@@ -18,6 +18,7 @@ docker compose up -d redis                        # infra only, for host dev
 cd backend && uv venv -p 3.12 .venv && uv pip install -r requirements-dev.txt
 cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
 cd backend && .venv/bin/python mock_upstream.py   # :9000, always 500
+cd backend && .venv/bin/python scripts/smoke_openai.py --model fast   # SDK end-to-end
 cd frontend && cp .env.example .env.local && pnpm dev   # :3000
 cd backend && .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 cd frontend && pnpm lint && pnpm build

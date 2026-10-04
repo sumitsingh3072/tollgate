@@ -28,6 +28,11 @@ added to an alias chain the same way.
 
 Model IDs are env-configurable (GEMINI_FAST_MODEL, GEMINI_SMART_MODEL).
 
+Gemma notes (measured Oct 2026 via the Gemini API): gemma-4-26b-a4b-it answers in
+~1-2s; gemma-4-31b-it takes ~15-35s and sometimes returns 503 "high demand", which
+is what the smart fallback chain is for. reasoning_effort is rejected (400) by
+Gemma; thinking is controlled via extra_body.google.thinking_config.
+
 ## Stack
 - Backend: Python 3.12, FastAPI, uvicorn, httpx (async, one pooled client),
   SQLAlchemy 2.0 async + asyncpg, redis-py asyncio, pydantic-settings

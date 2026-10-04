@@ -24,31 +24,46 @@ _TYPE_BY_STATUS = {
 class GatewayError(Exception):
     """Raise anywhere on the request path to return a typed error envelope."""
 
-    def __init__(self, status_code: int, type_: str, message: str, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        type_: str,
+        message: str,
+        *,
+        code: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.type = type_
         self.message = message
+        self.code = code
         self.headers = headers
 
 
-def error_response(status_code: int, type_: str, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={"error": {"type": type_, "message": message}},
-        headers=headers,
-    )
+def error_response(
+    status_code: int,
+    type_: str,
+    message: str,
+    *,
+    code: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    error: dict[str, str] = {"type": type_, "message": message}
+    if code:
+        error["code"] = code
+    return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
 
 
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(GatewayError)
     async def _gateway(_: Request, exc: GatewayError) -> JSONResponse:
-        return error_response(exc.status_code, exc.type, exc.message, exc.headers)
+        return error_response(exc.status_code, exc.type, exc.message, code=exc.code, headers=exc.headers)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
         type_ = _TYPE_BY_STATUS.get(exc.status_code, "server_error" if exc.status_code >= 500 else "error")
-        return error_response(exc.status_code, type_, str(exc.detail), getattr(exc, "headers", None))
+        return error_response(exc.status_code, type_, str(exc.detail), headers=getattr(exc, "headers", None))
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
