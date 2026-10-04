@@ -155,6 +155,12 @@ class _Context:
     def key_id(self) -> str:
         return str(self.key.id)
 
+    @property
+    def fallback_timeout(self) -> float | None:
+        """Deadline for attempts that still have a fallback. It includes fair-queue waiting, so a
+        saturated model falls back just like a slow one."""
+        return self.state.settings.fallback_timeout or None
+
     def waited(self, flight: Flight, ticket: Ticket | None) -> None:
         if ticket is not None:
             flight.queue_wait_ms = (flight.queue_wait_ms or 0) + ticket.wait_ms
@@ -182,7 +188,7 @@ async def _complete(ctx: _Context) -> JSONResponse:
                 queue.charge(ctx.key_id, output_tokens=usage.from_completion(value, ctx.prompt).completion_tokens)
                 return value
 
-        result = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, call)
+        result = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, call, ctx.fallback_timeout)
         flight.set_meta(result.upstream.model, result.fallback_used)
         if ctx.key_for_cache:
             flight.cache_status = await _store(ctx, result.upstream.model, result.value, flight)
@@ -242,7 +248,7 @@ async def _stream(ctx: _Context) -> StreamingResponse:
                 raise
 
         # Fallback is possible until the first byte: open_stream checks the upstream status first.
-        streamed = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, open_)
+        streamed = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, open_, ctx.fallback_timeout)
         chunks, ticket = streamed.value
         flight.set_meta(streamed.upstream.model, streamed.fallback_used)
         meter = usage.SSEUsageTracker(ctx.prompt)

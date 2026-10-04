@@ -34,9 +34,11 @@ Model IDs are env-configurable (GEMINI_FAST_MODEL, GEMINI_SMART_MODEL).
 
 Gemma notes (measured Oct 2026 via the Gemini API): gemma-4-26b-a4b-it answers in
 ~1-2s; gemma-4-31b-it takes ~15-35s and sometimes returns 503 "high demand", which
-is what the smart fallback chain is for. With the default 60s UPSTREAM_TIMEOUT, long
-answers from 31b (measured up to ~50s) are close to the limit; a timeout falls back to
-the fast model. reasoning_effort is rejected (400) by
+is what the smart fallback chain is for. Gemini sends no response headers until the
+first token, and under load 31b has taken 34-43s to get there. So any chain entry that
+has a fallback gets FALLBACK_TIMEOUT (default 30s; for streams, time to first byte)
+before the gateway moves on to the fast model; the last entry keeps the full
+UPSTREAM_TIMEOUT (120s). reasoning_effort is rejected (400) by
 Gemma; thinking is controlled via extra_body.google.thinking_config.
 
 ## Stack

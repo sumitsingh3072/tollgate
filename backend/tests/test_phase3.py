@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -6,7 +7,7 @@ import pytest
 import respx
 
 from app.config import Settings, Upstream
-from app.core import terse
+from app.core import fallback, terse
 from app.core.fallback import CircuitBreakers
 
 pytestmark = pytest.mark.respx(assert_all_called=False)
@@ -66,6 +67,56 @@ async def test_smart_falls_back_on_503_and_timeout(client, auth, gemini, setting
     assert resp.status_code == 200
     assert resp.headers["x-tollgate-fallback"] == "true"
     assert resp.headers["x-tollgate-model"] == settings.gemini_fast_model
+
+
+async def test_slow_upstream_falls_back_after_fallback_timeout() -> None:
+    breakers = CircuitBreakers(3, 30.0)
+    smart, fast = Upstream("smart-model", "http://up"), Upstream("fast-model", "http://up")
+
+    async def attempt(upstream: Upstream) -> str:
+        if upstream is smart:
+            await asyncio.sleep(10)
+        return upstream.model
+
+    result = await fallback.run_chain("smart", (smart, fast), breakers, attempt, fallback_timeout=0.05)
+
+    assert result.value == "fast-model"
+    assert result.fallback_used
+
+
+async def test_stream_falls_back_when_first_byte_is_slow(client, auth, gemini, settings: Settings) -> None:
+    settings.fallback_timeout = 0.05
+
+    async def sse() -> AsyncIterator[bytes]:
+        yield b'data: {"choices":[{"delta":{"content":"fast"},"index":0}]}\n\ndata: [DONE]\n\n'
+
+    async def by_model(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["model"] == settings.gemini_smart_model:
+            await asyncio.sleep(10)  # Gemini holds headers until the first token
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse())
+
+    gemini.mock(side_effect=by_model)
+
+    body = {"model": "smart", "messages": MESSAGES, "stream": True}
+    async with client.stream("POST", "/v1/chat/completions", json=body, headers=auth) as resp:
+        raw = b"".join([chunk async for chunk in resp.aiter_bytes()])
+
+    assert resp.status_code == 200
+    assert resp.headers["x-tollgate-fallback"] == "true"
+    assert resp.headers["x-tollgate-model"] == settings.gemini_fast_model
+    assert b'"fast"' in raw
+
+
+async def test_fallback_timeout_does_not_apply_to_last_upstream() -> None:
+    only = Upstream("only-model", "http://up")
+
+    async def attempt(upstream: Upstream) -> str:
+        await asyncio.sleep(0.1)
+        return upstream.model
+
+    result = await fallback.run_chain("fast", (only,), CircuitBreakers(3, 30.0), attempt, fallback_timeout=0.01)
+
+    assert result.value == "only-model"
 
 
 async def test_client_errors_do_not_fall_back(client, auth, gemini) -> None:

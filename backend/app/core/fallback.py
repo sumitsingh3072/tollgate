@@ -4,6 +4,7 @@ Breaker state is in-process (one gateway process per deployment here). After the
 single trial request is allowed (half-open); success closes the breaker, failure re-opens it.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -66,13 +67,31 @@ class ChainResult[T]:
     fallback_used: bool
 
 
+async def _attempt_with_deadline[T](
+    attempt: Callable[[Upstream], Awaitable[T]], upstream: Upstream, seconds: float | None
+) -> T:
+    try:
+        async with asyncio.timeout(seconds):  # None = no deadline
+            return await attempt(upstream)
+    except TimeoutError as exc:
+        raise GatewayError(
+            504, "upstream_timeout", f"upstream {upstream.model}: no response within {seconds:g}s"
+        ) from exc
+
+
 async def run_chain[T](
     alias: str,
     chain: Sequence[Upstream],
     breakers: CircuitBreakers,
     attempt: Callable[[Upstream], Awaitable[T]],
+    fallback_timeout: float | None = None,
 ) -> ChainResult[T]:
-    """Try each upstream in order, skipping open circuits. Raises the last error if all fail."""
+    """Try each upstream in order, skipping open circuits. Raises the last error if all fail.
+
+    fallback_timeout caps every attempt that still has a next upstream to fall back to (for streams
+    that is time to first byte, since attempt returns once headers arrive). The last attempt only
+    has the HTTP client's UPSTREAM_TIMEOUT.
+    """
     candidates = [u for u in chain if breakers.allows(u)]
     if not candidates:
         # Everything is open: trying beats failing without a single attempt.
@@ -80,14 +99,15 @@ async def run_chain[T](
 
     last_error: GatewayError | None = None
     for index, upstream in enumerate(candidates):
+        has_next = index + 1 < len(candidates)
         try:
-            value = await attempt(upstream)
+            value = await _attempt_with_deadline(attempt, upstream, fallback_timeout if has_next else None)
         except GatewayError as exc:
             if not is_retryable(exc):
                 raise
             breakers.record_failure(upstream)
             last_error = exc
-            if index + 1 < len(candidates):
+            if has_next:
                 log.warning(
                     "upstream failed, falling back",
                     extra={

@@ -93,6 +93,8 @@ caps in-flight requests per model and orders waiters by a Virtual Token Counter 
    Authorization header is never forwarded. Streams check the upstream status
    before sending headers, so failures return a normal JSON error., skipping any with an open circuit
    breaker. On connect error, timeout, or 5xx -> record failure, try next.
+   Entries that have a fallback get FALLBACK_TIMEOUT (30s; time to first byte for
+   streams); the last entry gets the full UPSTREAM_TIMEOUT.
    Upstream 429 also falls back (separate per-model quota); other 4xx return
    immediately. Breaker: 3 consecutive failures -> open for 30s, then one
    half-open trial. Breakers are in-process (app.state.breakers). If every
