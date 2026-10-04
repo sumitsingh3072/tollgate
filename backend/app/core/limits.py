@@ -57,27 +57,29 @@ async def check(redis: Redis, key: KeyRecord, now: datetime | None = None) -> Li
         count, _, used_raw = await pipe.execute()
 
     used = int(used_raw or 0)
+    # Clamped at 0: rejected requests still INCR the counter, and usage can overshoot the quota.
+    state = LimitState(
+        rpm=key.rpm,
+        requests_remaining=max(0, key.rpm - count),
+        daily_token_quota=key.daily_token_quota,
+        tokens_remaining=max(0, key.daily_token_quota - used),
+    )
     if count > key.rpm:
         retry_after = _WINDOW_SECONDS - int(now.timestamp()) % _WINDOW_SECONDS
         raise GatewayError(
             429,
             "rate_limit",
             f"Rate limit reached: {key.rpm} requests per minute. Retry in {retry_after}s.",
-            headers={"Retry-After": str(retry_after)},
+            headers={**state.headers(), "Retry-After": str(retry_after)},
         )
     if used >= key.daily_token_quota:
         raise GatewayError(
             429,
             "quota_exceeded",
             f"Daily token quota reached: {used}/{key.daily_token_quota} tokens used today (UTC).",
-            headers={"Retry-After": str(_seconds_to_midnight(now))},
+            headers={**state.headers(), "Retry-After": str(_seconds_to_midnight(now))},
         )
-    return LimitState(
-        rpm=key.rpm,
-        requests_remaining=key.rpm - count,
-        daily_token_quota=key.daily_token_quota,
-        tokens_remaining=key.daily_token_quota - used,
-    )
+    return state
 
 
 async def record_tokens(redis: Redis, key_id: uuid.UUID, tokens: int, now: datetime | None = None) -> None:

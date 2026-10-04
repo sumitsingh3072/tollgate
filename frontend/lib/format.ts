@@ -45,6 +45,14 @@ export function formatLatencyBin(lower: number, upper: number | null): string {
   return `${bare(lower, inSeconds)}–${unit(upper)}`;
 }
 
+/** Narrow axis tick for a latency bin, always in seconds: "<.25s", ".25–.5s", "1–2s", "≥30s". */
+export function formatLatencyBinShort(lower: number, upper: number | null): string {
+  const s = (ms: number) => `${ms / 1000}`.replace(/^0\./, ".");
+  if (upper === null) return `≥${s(lower)}s`;
+  if (lower === 0) return `<${s(upper)}s`;
+  return `${s(lower)}–${s(upper)}s`;
+}
+
 /** UTC calendar day ("2026-10-04") -> "Oct 4", independent of the viewer's time zone. */
 export function formatDay(date: string, withYear = false): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString(LOCALE, {
