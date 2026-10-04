@@ -3,10 +3,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_ADMIN_TOKEN = "change-me"
@@ -23,6 +24,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://tollgate:tollgate@localhost:5432/tollgate"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Where models run: "gemini" (default, Google's hosted API: light on the machine) or "ollama"
+    # (fully local; start compose with --profile ollama).
+    upstream_provider: Literal["gemini", "ollama"] = "gemini"
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_fast_model: str = "gemma3:1b"
+    ollama_smart_model: str = "gemma3:4b"
+
     gemini_api_key: SecretStr = SecretStr("")
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_fast_model: str = "gemma-4-26b-a4b-it"
@@ -33,14 +41,17 @@ class Settings(BaseSettings):
     mock_upstream_url: str = "http://localhost:9000/v1"
 
     admin_token: SecretStr = SecretStr(DEFAULT_ADMIN_TOKEN)
+    # Zero-config deployments generate the token into a shared file (docker compose secrets-init).
+    # An explicit ADMIN_TOKEN always wins.
+    admin_token_file: Path | None = None
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
 
     key_cache_ttl: int = 60
     log_flush_interval: float = 2.0
-    upstream_timeout: float = 60.0
+    upstream_timeout: float = 120.0  # local models on CPU are slow, especially on first load
     upstream_connect_timeout: float = 5.0
 
-    # Caps for self-serve (signed-in) users; the shared GEMINI_API_KEY pays for their traffic.
+    # Caps for self-serve (signed-in) users, who share the gateway's upstream capacity.
     user_max_keys: int = 5
     user_max_rpm: int = 120
     user_max_daily_tokens: int = 500_000
@@ -54,7 +65,18 @@ class Settings(BaseSettings):
     def _asyncpg_url(cls, v: str) -> str:
         return normalize_database_url(v)
 
-    @field_validator("gemini_base_url", "mock_upstream_url")
+    @model_validator(mode="after")
+    def _admin_token_from_file(self) -> "Settings":
+        if self.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN and self.admin_token_file:
+            try:
+                token = self.admin_token_file.read_text().strip()
+            except OSError:
+                token = ""
+            if token:
+                self.admin_token = SecretStr(token)
+        return self
+
+    @field_validator("gemini_base_url", "mock_upstream_url", "ollama_base_url")
     @classmethod
     def _strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
@@ -114,11 +136,24 @@ class Alias:
     terse: bool = False
 
 
-def build_aliases(settings: Settings) -> dict[str, Alias]:
+def upstream_models(settings: Settings) -> tuple[Upstream, Upstream]:
+    """(fast, smart) for the configured provider."""
+    if settings.upstream_provider == "ollama":
+        # Ollama's OpenAI-compatible API needs no key.
+        return (
+            Upstream(settings.ollama_fast_model, settings.ollama_base_url),
+            Upstream(settings.ollama_smart_model, settings.ollama_base_url),
+        )
     key = settings.gemini_api_key.get_secret_value()
     params = _gemini_params(settings)
-    fast = Upstream(settings.gemini_fast_model, settings.gemini_base_url, key, params)
-    smart = Upstream(settings.gemini_smart_model, settings.gemini_base_url, key, params)
+    return (
+        Upstream(settings.gemini_fast_model, settings.gemini_base_url, key, params),
+        Upstream(settings.gemini_smart_model, settings.gemini_base_url, key, params),
+    )
+
+
+def build_aliases(settings: Settings) -> dict[str, Alias]:
+    fast, smart = upstream_models(settings)
     smart_chain = (smart, fast)
     # Always-500 upstream first, so failover can be demoed on demand.
     mock = Upstream("mock-500", settings.mock_upstream_url)

@@ -1,5 +1,7 @@
 import * as React from "react"
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
+import { mergeProps } from "@base-ui/react/merge-props"
+import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
@@ -45,22 +47,20 @@ function Button({
   variant = "default",
   size = "default",
   render,
-  nativeButton,
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
-  // Rendered as a link (<Link>, <a>)? Then it isn't a native <button>; tell Base UI so it adds
-  // the right semantics instead of warning.
-  const isNative =
-    nativeButton ?? (render === undefined || (React.isValidElement(render) && render.type === "button"))
-  return (
-    <ButtonPrimitive
-      data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
-      render={render}
-      nativeButton={isNative}
-      {...props}
-    />
-  )
+  const classes = cn(buttonVariants({ variant, size, className }))
+  // Rendered as a link (<Link>, <a>): keep it a real link (role, href, middle-click) with button
+  // styling, instead of Base UI's button behaviour, which would add role="button".
+  const isLink = React.isValidElement(render) && render.type !== "button"
+  const link = useRender({
+    render: isLink ? render : <span />,
+    props: mergeProps<"a">({ className: classes }, props as React.ComponentProps<"a">),
+    state: { slot: "button" },
+  })
+  if (isLink) return link
+
+  return <ButtonPrimitive data-slot="button" className={classes} render={render} {...props} />
 }
 
 export { Button, buttonVariants }

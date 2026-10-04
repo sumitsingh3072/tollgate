@@ -67,7 +67,8 @@ async def test_series_is_zero_filled_and_bucketed(client, app: FastAPI) -> None:
     assert len(stats["series"]) in (24, 25)  # depends on where "now" falls inside the hour
     assert sum(p["requests"] for p in stats["series"]) == 3
     assert sum(p["errors"] for p in stats["series"]) == 1
-    assert stats["series"][-1]["requests"] >= 1
+    # The two recent events land in the newest bucket, or the one before it right after the hour.
+    assert stats["series"][-1]["requests"] + stats["series"][-2]["requests"] == 2
     week = (await client.get("/admin/stats?hours=168", headers=ADMIN_HEADERS)).json()
     assert week["bucket_seconds"] == 6 * 3600
 

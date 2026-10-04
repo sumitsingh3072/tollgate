@@ -38,7 +38,14 @@ class DownEngine:
 @pytest.fixture
 def settings() -> Settings:
     # _env_file=None: tests never read a developer's real .env
-    return Settings(_env_file=None, environment="test", gemini_api_key="test-key", admin_token="test-admin")
+    # Most suites exercise the Gemini path (keys, extra_body); test_local.py covers Ollama.
+    return Settings(
+        _env_file=None,
+        environment="test",
+        upstream_provider="gemini",
+        gemini_api_key="test-key",
+        admin_token="test-admin",
+    )
 
 
 @pytest.fixture

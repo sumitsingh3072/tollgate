@@ -5,8 +5,10 @@ An OpenAI-compatible LLM gateway. Apps change one line (their SDK base_url) and
 every request flows through Tollgate, which adds API keys, rate limits, daily
 token quotas, exact-match caching, model fallback with a circuit breaker,
 streaming passthrough, a "terse mode" that reduces output tokens, and request
-logging with analytics. Upstream models are Google's open Gemma 4 models, served
-by the Gemini API and reached through
+logging with analytics. By default models come from the Gemini API (light on the
+host) with a bundled Postgres and no sign-in; fully local models (Ollama), Neon and
+Clerk accounts are configuration switches. Default models are Google's open Gemma 4
+models, served by the Gemini API and reached through
 Gemini's OpenAI-compatible endpoint
 (https://generativelanguage.googleapis.com/v1beta/openai, Bearer GEMINI_API_KEY),
 so no provider adapters are needed. Any other OpenAI-compatible upstream can be

@@ -1,6 +1,13 @@
 // Shapes returned by the gateway (mirrors backend/app/schemas.py).
 
-export type GatewayHealth = { status: "ok" | "degraded" | "offline"; redis: boolean; db: boolean };
+export type GatewayHealth = {
+  status: "ok" | "degraded" | "offline";
+  redis: boolean;
+  db: boolean;
+  /** Is the model provider usable? Gemini: API key set. Ollama: models downloaded. */
+  upstream?: boolean;
+  provider?: "gemini" | "ollama";
+};
 
 export type ApiKey = {
   id: string;

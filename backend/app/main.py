@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api import admin, v1
-from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings
+from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings, upstream_models
 from app.core import tasks
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
@@ -41,7 +41,7 @@ TOLLGATE_HEADERS = [
 def _warn_on_insecure_config(settings: Settings) -> None:
     if settings.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN:
         log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
-    if not settings.gemini_api_key.get_secret_value():
+    if settings.upstream_provider == "gemini" and not settings.gemini_api_key.get_secret_value():
         log.warning("GEMINI_API_KEY is not set; upstream calls will fail with 401")
 
 
@@ -66,7 +66,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.log_queue = LogQueue(app.state.sessionmaker, settings.log_flush_interval)
     app.state.log_queue.start()
 
-    log.info("gateway started", extra={"env": settings.environment, "aliases": ",".join(app.state.aliases)})
+    log.info(
+        "gateway started",
+        extra={
+            "env": settings.environment,
+            "provider": settings.upstream_provider,
+            "aliases": ",".join(app.state.aliases),
+        },
+    )
     try:
         yield
     finally:
@@ -109,8 +116,18 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
 
     @app.get("/health", tags=["ops"])
     async def health(request: Request) -> dict[str, object]:
-        redis_ok, db_ok = await asyncio.gather(_check_redis(request.app), _check_db(request.app))
-        return {"status": "ok" if redis_ok and db_ok else "degraded", "redis": redis_ok, "db": db_ok}
+        redis_ok, db_ok, upstream = await asyncio.gather(
+            _check_redis(request.app), _check_db(request.app), _check_upstream(request.app)
+        )
+        # upstream: is the model provider usable? Gemini: an API key is configured (not probed: cost,
+        # rate limits). Ollama: every configured model is downloaded.
+        return {
+            "status": "ok" if redis_ok and db_ok and upstream else "degraded",
+            "redis": redis_ok,
+            "db": db_ok,
+            "upstream": upstream,
+            "provider": request.app.state.settings.upstream_provider,
+        }
 
     return app
 
@@ -121,6 +138,24 @@ async def _check_redis(app: FastAPI) -> bool:
     except Exception as exc:
         log.warning("redis health check failed", extra={"error": repr(exc)})
         return False
+
+
+async def _check_upstream(app: FastAPI) -> bool:
+    settings: Settings = app.state.settings
+    if settings.upstream_provider == "gemini":
+        return bool(settings.gemini_api_key.get_secret_value())
+    try:
+        resp = await app.state.http.get(f"{settings.ollama_base_url}/models", timeout=HEALTH_CHECK_TIMEOUT)
+        resp.raise_for_status()
+        available = {m["id"] for m in resp.json().get("data", [])}
+    except Exception as exc:
+        log.warning("ollama health check failed", extra={"error": repr(exc)})
+        return False
+    wanted = {u.model for u in upstream_models(settings)}
+    missing = wanted - available
+    if missing:
+        log.warning("ollama models not pulled yet", extra={"missing": ",".join(sorted(missing))})
+    return not missing
 
 
 async def _check_db(app: FastAPI) -> bool:

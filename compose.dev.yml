@@ -1,0 +1,12 @@
+# Host development: publish infra ports so a host-run backend/frontend can reach them.
+#   docker compose -f docker-compose.yml -f compose.dev.yml up -d redis postgres mock-upstream
+#   (add --profile ollama ... ollama ollama-init for local models)
+services:
+  redis:
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+  postgres:
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+  ollama:
+    ports: ["127.0.0.1:${OLLAMA_PORT:-11434}:11434"]
+  mock-upstream:
+    ports: ["127.0.0.1:${MOCK_PORT:-9000}:9000"]

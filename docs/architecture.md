@@ -1,13 +1,25 @@
 # Tollgate Lite: Architecture
 
+## Deployment modes
+Same images, chosen by .env (all optional):
+| Concern  | Default                               | Optional                                 |
+|----------|---------------------------------------|------------------------------------------|
+| Models   | Gemini API (GEMINI_API_KEY)           | Ollama: UPSTREAM_PROVIDER=ollama + `--profile ollama` |
+| Database | bundled postgres:17                   | Neon or any Postgres (DATABASE_URL)      |
+| Accounts | none: dashboard is the operator       | Clerk (publishable + secret key)         |
+| Network  | ports bound to 127.0.0.1              | BIND_ADDRESS=0.0.0.0 behind TLS          |
+The admin token is generated on first start (secrets-init) unless ADMIN_TOKEN is set.
+
 ## Components
 - Gateway (FastAPI, :8000): /v1 data plane + /admin control plane.
 - Redis (:6379): rate-limit counters, token quotas, response cache, cached key
   lookups.
 - Neon Postgres: api_keys, request_logs. (Local dev: postgres:17 via the
   `localdb` compose profile.)
-- Gemini API (generativelanguage.googleapis.com/v1beta/openai): serves the Gemma 4
-  upstream models,
+- Ollama (:11434, internal, `ollama` compose profile): optional local models (default
+  gemma3:1b / gemma3:4b), pulled by the one-shot ollama-init service into a volume.
+- Gemini API (generativelanguage.googleapis.com/v1beta/openai): hosted alternative
+  serving the Gemma 4 upstream models,
   OpenAI-compatible, Bearer GEMINI_API_KEY. The key lives only in the gateway.
 - Mock upstream (:9000): always returns 500, used to demo failover.
 - Dashboard (Next.js, :3000): Server Components read /admin server-side and
@@ -92,7 +104,7 @@ flowchart LR
 |--------|-----------------------|-----------------------------------------|
 | POST   | /v1/chat/completions  | OpenAI-compatible chat, stream/non-stream|
 | GET    | /v1/models            | Aliases available                        |
-| GET    | /health               | Liveness + redis/db connectivity         |
+| GET    | /health               | Liveness + redis/db + provider usable    |
 | POST   | /admin/keys           | Create key (full key returned once)      |
 | GET    | /admin/keys           | List keys (prefix only)                  |
 | DELETE | /admin/keys/{id}      | Revoke (also deletes Redis cache entry)  |
@@ -179,8 +191,11 @@ tollgate/
 │   ├── Dockerfile                   # standalone output, non-root
 │   └── .env.example
 ├── docs/ (plan.md, architecture.md, phase.md)
-├── .env.example               # single env file for compose + local backend
-├── docker-compose.yml         # redis, backend, mock-upstream, frontend; postgres (profile localdb)
+├── .env.example               # all optional; compose + local backend read it
+├── docker-compose.yml         # zero-config stack: secrets-init, redis, postgres, ollama(+init),
+│                              #   mock-upstream, backend, frontend (ollama: opt-in profile)
+├── compose.dev.yml            # publish infra ports for host development
+├── compose.gpu.yml            # NVIDIA GPU for Ollama
 ├── CLAUDE.md
 └── README.md
 ```

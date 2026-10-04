@@ -5,6 +5,7 @@ import { Geist_Mono, Inter } from "next/font/google";
 import { ThemeScript } from "@/components/theme-script";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { CLERK_ENABLED } from "@/lib/auth-config";
 import "./globals.css";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
@@ -24,6 +25,12 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
+  const content = (
+    <TooltipProvider>
+      {children}
+      <Toaster position="bottom-right" />
+    </TooltipProvider>
+  );
   return (
     // suppressHydrationWarning: ThemeScript sets class/style on <html> before React hydrates.
     <html lang="en" className={`${inter.variable} ${geistMono.variable} antialiased`} suppressHydrationWarning>
@@ -31,14 +38,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <ThemeScript />
       </head>
       <body>
-        {/* Clerk components read our theme tokens through --clerk-* variables in globals.css. */}
-        {/* Sign-in/up URLs come from next.config.ts env so server redirects agree with the client. */}
-        <ClerkProvider afterSignOutUrl="/">
-          <TooltipProvider>
-            {children}
-            <Toaster position="bottom-right" />
-          </TooltipProvider>
-        </ClerkProvider>
+        {CLERK_ENABLED ? (
+          // Clerk reads our theme tokens through --clerk-* variables in globals.css; sign-in/up URLs
+          // come from next.config.ts env so server redirects agree with the client.
+          <ClerkProvider afterSignOutUrl="/">{content}</ClerkProvider>
+        ) : (
+          content
+        )}
       </body>
     </html>
   );
