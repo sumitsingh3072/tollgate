@@ -1,5 +1,6 @@
 import { PlaceholderPage } from "@/components/placeholder-page";
+import { NAV_ITEMS } from "@/lib/nav";
 
 export default function LogsPage() {
-  return <PlaceholderPage title="Logs" phase={5} />;
+  return <PlaceholderPage item={NAV_ITEMS[2]} phase={5} />;
 }

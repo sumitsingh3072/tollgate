@@ -4,8 +4,11 @@
 - Gateway (FastAPI, :8000): /v1 data plane + /admin control plane.
 - Redis (:6379): rate-limit counters, token quotas, response cache, cached key
   lookups.
-- Neon Postgres: api_keys, request_logs.
-- Ollama (:11434): upstream models.
+- Neon Postgres: api_keys, request_logs. (Local dev: postgres:17 via the
+  `localdb` compose profile.)
+- Gemini API (generativelanguage.googleapis.com/v1beta/openai): serves the Gemma 4
+  upstream models,
+  OpenAI-compatible, Bearer GEMINI_API_KEY. The key lives only in the gateway.
 - Mock upstream (:9000): always returns 500, used to demo failover.
 - Dashboard (Next.js, :3000): calls /admin via its own server-side route handler
   (adds ADMIN_TOKEN); Playground calls /v1 directly with a pasted Tollgate key.
@@ -17,10 +20,24 @@ flowchart LR
   GW <--> R[(Redis)]
   GW --> Q[Log queue] -->|batch every 2s| DB[(Neon Postgres)]
   GW -->|admin queries| DB
-  GW --> O1[Ollama llama3.2:3b]
-  GW -. fallback .-> O2[Ollama qwen2.5:1.5b]
+  GW --> O1[Gemma gemma-4-31b-it]
+  GW -. fallback .-> O2[Gemma gemma-4-26b-a4b-it]
   GW -. demo .-> M[Mock upstream 500]
 ```
+
+## Cross-cutting
+- Request context middleware (pure ASGI, streaming-safe): accepts a safe
+  incoming x-request-id or generates one, echoes it in the response, attaches it
+  to every log record, writes one access log line (method, path, status,
+  latency_ms). /health is excluded from access logs.
+- Errors: every failure, including 404/422/500, returns the OpenAI envelope
+  {"error":{"type","message"}}. Unhandled exceptions are logged with a stack
+  trace and masked as server_error with the request id.
+- Logging: LOG_FORMAT=console (dev) or json (containers). Secrets (Gemini key,
+  admin token) are SecretStr and never logged; Upstream.api_key is excluded
+  from repr.
+- Config: pydantic-settings reads the repo-root .env (shared with compose),
+  then backend/.env. Aliases are built once at startup into app.state.aliases.
 
 ## Request flow: POST /v1/chat/completions
 1. Auth: hash the Bearer key (SHA-256). Look it up in Redis (key:{hash}), else
@@ -33,7 +50,8 @@ flowchart LR
 4. Cache (only temperature==0 and stream false): key = sha256 of
    (alias, messages, temperature, max_tokens). Hit -> return, header
    x-tollgate-cache: hit.
-5. Forward: try each upstream in order, skipping any with an open circuit
+5. Forward: try each upstream in order (POST {base_url}/chat/completions with
+   Authorization: Bearer {upstream.api_key}, model rewritten to the upstream id), skipping any with an open circuit
    breaker. On connect error, timeout, or 5xx -> record failure, try next.
    Breaker: 3 consecutive failures -> open for 30s.
 6. Stream: relay SSE chunks unchanged via StreamingResponse. Request
@@ -70,9 +88,12 @@ Tables created with metadata.create_all on startup (no Alembic).
 tollgate/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py            # app factory, lifespan (httpx, redis, db, log flusher)
-│   │   ├── config.py          # Settings + MODEL_ALIASES
+│   │   ├── main.py            # app factory, lifespan (httpx, redis, db, log flusher), /health
+│   │   ├── config.py          # Settings + build_aliases (Gemma chains)
 │   │   ├── deps.py            # auth + admin-token dependencies
+│   │   ├── errors.py          # GatewayError + OpenAI-style error handlers
+│   │   ├── logging_setup.py   # console/JSON formatters, request-id contextvar
+│   │   ├── middleware.py      # request id + access log (pure ASGI)
 │   │   ├── api/
 │   │   │   ├── v1.py
 │   │   │   └── admin.py
@@ -89,21 +110,32 @@ tollgate/
 │   │   └── logging_queue.py
 │   ├── tests/
 │   ├── mock_upstream.py
-│   ├── requirements.txt
-│   └── .env.example
+│   ├── requirements.txt       # runtime pins
+│   ├── requirements-dev.txt   # + pytest, respx, ruff
+│   ├── pyproject.toml         # ruff + pytest config
+│   └── Dockerfile             # multi-stage, non-root; also runs mock_upstream
 ├── frontend/
 │   ├── app/
-│   │   ├── layout.tsx
+│   │   ├── layout.tsx               # theme script, SidebarProvider, inset shell
 │   │   ├── page.tsx                 # Overview
 │   │   ├── keys/page.tsx
 │   │   ├── logs/page.tsx
 │   │   ├── playground/page.tsx
-│   │   └── api/admin/[...path]/route.ts
-│   ├── components/ (ui/, stat-card, usage-chart, logs-table, create-key-dialog)
-│   ├── lib/api.ts
+│   │   └── api/
+│   │       ├── admin/[...path]/route.ts   # adds ADMIN_TOKEN server-side
+│   │       └── health/route.ts            # gateway status for the sidebar
+│   ├── components/
+│   │   ├── ui/                      # shadcn (base-nova)
+│   │   ├── app-sidebar, site-header, page-header, theme-toggle, theme-script,
+│   │   │   gateway-status
+│   │   └── stat-card, usage-chart, logs-table, create-key-dialog (Phase 5)
+│   ├── hooks/use-mobile.ts
+│   ├── lib/ (api.ts, nav.ts, theme.ts, theme-config.ts, types.ts, server/gateway.ts)
+│   ├── Dockerfile                   # standalone output, non-root
 │   └── .env.example
 ├── docs/ (plan.md, architecture.md, phase.md)
-├── docker-compose.yml
+├── .env.example               # single env file for compose + local backend
+├── docker-compose.yml         # redis, backend, mock-upstream, frontend; postgres (profile localdb)
 ├── CLAUDE.md
 └── README.md
 ```
