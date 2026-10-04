@@ -43,8 +43,11 @@ flowchart LR
 1. Auth: hash the Bearer key (SHA-256). Look it up in Redis (key:{hash}), else
    Neon, then cache it for 60s. Unknown or revoked -> 401.
 2. Limits: RPM counter rl:{key_id}:{minute} (INCR + EXPIRE). Daily tokens
-   tok:{key_id}:{YYYY-MM-DD}. Over either -> 429 with JSON
-   {"error":{"type":"rate_limit"|"quota_exceeded","message":...}}.
+   tok:{key_id}:{YYYY-MM-DD} (UTC). Both in one pipelined round trip. Over either
+   -> 429 with JSON {"error":{"type":"rate_limit"|"quota_exceeded","message":...}}
+   and Retry-After. Success responses carry x-ratelimit-{limit,remaining}-{requests,tokens}.
+   Unknown/revoked keys are cached as invalid for KEY_CACHE_TTL too. Redis or DB
+   unavailable -> 503 service_unavailable.
 3. Resolve alias -> chain of upstreams; terse aliases prepend the terse system
    prompt.
 4. Cache (only temperature==0 and stream false): key = sha256 of
@@ -60,7 +63,10 @@ flowchart LR
    Breaker: 3 consecutive failures -> open for 30s.
 6. Stream: relay SSE chunks unchanged via StreamingResponse. Request
    stream_options include_usage when supported; otherwise estimate tokens.
-7. After: INCR token counter, store cache entry (TTL 1h), enqueue log event.
+7. After: INCRBY usage.total_tokens (Gemma counts thinking tokens only in the total;
+   chars/4 estimate if usage is missing; streams parse usage from SSE and record it
+   from a background task so client disconnects still count), store cache entry
+   (TTL 1h), enqueue log event.
    Headers: x-tollgate-model, x-tollgate-cache, x-tollgate-fallback.
 
 ## Endpoints
@@ -103,6 +109,9 @@ tollgate/
 │   │   │   ├── v1.py
 │   │   │   └── admin.py
 │   │   ├── core/
+│   │   │   ├── keys.py        # key format, SHA-256, Redis key cache (incl. negative entries)
+│   │   │   ├── usage.py       # usage from JSON/SSE, chars/4 estimate
+│   │   │   ├── tasks.py       # fire-and-forget tasks (survive client disconnect), drained on shutdown
 │   │   │   ├── proxy.py       # forwarding + SSE streaming
 │   │   │   ├── fallback.py    # chain + circuit breaker
 │   │   │   ├── cache.py

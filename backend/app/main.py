@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from app.api import admin, v1
 from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings
+from app.core import tasks
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await tasks.drain()
         await app.state.http.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()

@@ -5,6 +5,8 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.logging_setup import request_id_var
@@ -71,6 +73,13 @@ def install_error_handlers(app: FastAPI) -> None:
         loc = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
         message = f"{loc}: {first.get('msg', 'invalid request')}" if loc else first.get("msg", "invalid request")
         return error_response(422, "invalid_request_error", message)
+
+    @app.exception_handler(RedisError)
+    @app.exception_handler(SQLAlchemyError)
+    @app.exception_handler(OSError)
+    async def _dependency_down(_: Request, exc: Exception) -> JSONResponse:
+        log.error("dependency unavailable", extra={"error": repr(exc)})
+        return error_response(503, "service_unavailable", "A gateway dependency is unavailable; retry shortly.")
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:

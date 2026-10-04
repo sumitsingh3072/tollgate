@@ -3,8 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Text, Uuid, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -15,7 +14,7 @@ class Base(DeclarativeBase):
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(Text)
     key_hash: Mapped[str] = mapped_column(Text, unique=True)
     prefix: Mapped[str] = mapped_column(Text)
@@ -34,7 +33,7 @@ class RequestLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    key_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
+    key_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("api_keys.id"), nullable=True)
     alias: Mapped[str] = mapped_column(Text)
     model_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     in_tokens: Mapped[int] = mapped_column(Integer, default=0)

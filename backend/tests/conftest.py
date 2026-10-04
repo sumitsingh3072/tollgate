@@ -1,38 +1,37 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 import pytest
+from fakeredis import FakeAsyncRedis
 from fastapi import FastAPI
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
+from app.db.session import create_sessionmaker, init_db
 from app.main import create_app
 
-
-class FakeRedis:
-    def __init__(self, up: bool = True) -> None:
-        self.up = up
-
-    async def ping(self) -> bool:
-        if not self.up:
-            raise ConnectionError("redis down")
-        return True
+ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 
 
-class FakeConn:
-    async def execute(self, _stmt: object) -> None:
-        return None
+class DownRedis:
+    """Every command fails like an unreachable Redis."""
+
+    def __getattr__(self, name: str) -> Callable[..., Awaitable[Any]]:
+        async def _fail(*_: Any, **__: Any) -> Any:
+            raise RedisConnectionError("redis down")
+
+        return _fail
 
 
-class FakeEngine:
-    def __init__(self, up: bool = True) -> None:
-        self.up = up
-
+class DownEngine:
     @asynccontextmanager
-    async def connect(self) -> AsyncIterator[FakeConn]:
-        if not self.up:
-            raise OSError("db down")
-        yield FakeConn()
+    async def connect(self) -> AsyncIterator[None]:
+        raise OSError("db down")
+        yield
 
 
 @pytest.fixture
@@ -49,13 +48,30 @@ async def http() -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.fixture
-def make_app(settings: Settings, http: httpx.AsyncClient) -> Callable[..., FastAPI]:
-    """Build an app with fake redis/db on app.state (no lifespan, no real network)."""
+async def redis() -> AsyncIterator[FakeAsyncRedis]:
+    client = FakeAsyncRedis(decode_responses=True)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+async def engine() -> AsyncIterator[AsyncEngine]:
+    # One shared in-memory SQLite connection stands in for Postgres.
+    eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    await init_db(eng)
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+def make_app(settings: Settings, http: httpx.AsyncClient, redis: FakeAsyncRedis, engine: AsyncEngine):
+    """Build an app on fake redis + SQLite (no lifespan, no real network)."""
 
     def _make(redis_up: bool = True, db_up: bool = True) -> FastAPI:
         app = create_app(settings, use_lifespan=False)
-        app.state.redis = FakeRedis(redis_up)
-        app.state.engine = FakeEngine(db_up)
+        app.state.redis = redis if redis_up else DownRedis()
+        app.state.engine = engine if db_up else DownEngine()
+        app.state.sessionmaker = create_sessionmaker(engine)
         app.state.http = http
         return app
 
@@ -69,3 +85,26 @@ def make_client(make_app: Callable[..., FastAPI]) -> Callable[..., httpx.AsyncCl
         return httpx.AsyncClient(transport=transport, base_url="http://test")
 
     return _make
+
+
+@pytest.fixture
+async def client(make_client: Callable[..., httpx.AsyncClient]) -> AsyncIterator[httpx.AsyncClient]:
+    async with make_client() as c:
+        yield c
+
+
+@pytest.fixture
+def create_key(client: httpx.AsyncClient) -> Callable[..., Awaitable[dict[str, Any]]]:
+    async def _create(**overrides: Any) -> dict[str, Any]:
+        resp = await client.post("/admin/keys", json={"name": "test", **overrides}, headers=ADMIN_HEADERS)
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    return _create
+
+
+@pytest.fixture
+async def auth(create_key: Callable[..., Awaitable[dict[str, Any]]]) -> dict[str, str]:
+    """Authorization header for a freshly created key with generous limits."""
+    key = await create_key(rpm=1000, daily_token_quota=1_000_000)
+    return {"Authorization": f"Bearer {key['key']}"}

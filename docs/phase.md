@@ -50,10 +50,16 @@ and /health shows redis and db true.
 Done when: OpenAI Python SDK works with only base_url changed, streaming included.
 
 ## Phase 2: Keys and limits
-- [ ] POST/GET/DELETE /admin/keys; tg_live_ + 32 random chars; store SHA-256 only
-- [ ] Admin-token dependency (constant-time compare)
-- [ ] Auth dependency with Redis-cached lookup (60s TTL); revoke deletes cache entry
-- [ ] RPM limit and daily token quota in Redis; 429 with clear JSON + Retry-After
+- [x] POST/GET/DELETE /admin/keys; tg_live_ + 32 random chars; store SHA-256 only
+      (list includes tokens_today; revoke is idempotent)
+- [x] Admin-token dependency (constant-time compare)
+- [x] Auth dependency with Redis-cached lookup (60s TTL); revoke deletes cache entry;
+      unknown/revoked keys negatively cached so bad keys never hammer the DB
+- [x] RPM limit and daily token quota in Redis (one round trip); 429 with clear JSON
+      + Retry-After; x-ratelimit-* headers on success
+- [x] Token accounting: usage.total_tokens (includes Gemma thinking tokens), parsed
+      from streams too, chars/4 estimate when upstream omits usage
+- [x] Redis/DB outages return 503 service_unavailable; tests on fakeredis + SQLite
 Done when: hammering one key hits its limit while a second key still works.
 
 ## Phase 3: Cache, failover, terse
