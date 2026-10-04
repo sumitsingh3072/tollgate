@@ -134,7 +134,7 @@ export function Playground({ aliases }: { aliases: AliasInfo[] }) {
                       <>Try the same prompt on smart and smart-terse, or demo-failover to watch a fallback.</>
                     ) : (
                       <>
-                        Paste a key in the settings panel. No key yet? <Link href="/keys">Create one</Link>.
+                        Paste a key in the settings panel. No key yet? <Link href="/dashboard/keys">Create one</Link>.
                       </>
                     )}
                   </EmptyDescription>

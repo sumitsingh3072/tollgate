@@ -31,7 +31,7 @@ function pageHref(filters: LogFilterValues, before?: number): string {
   for (const [name, value] of Object.entries(filters)) if (value) params.set(name, value);
   if (before) params.set("before", String(before));
   const query = params.toString();
-  return query ? `/logs?${query}` : "/logs";
+  return query ? `/dashboard/logs?${query}` : "/dashboard/logs";
 }
 
 function StatusBadge({ status }: { status: number }) {

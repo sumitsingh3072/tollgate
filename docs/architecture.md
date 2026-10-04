@@ -41,6 +41,17 @@ flowchart LR
 - Config: pydantic-settings reads the repo-root .env (shared with compose),
   then backend/.env. Aliases are built once at startup into app.state.aliases.
 
+## Accounts (Clerk)
+- The dashboard signs users in with Clerk. Public: / (landing), /sign-in, /sign-up.
+  Signed-in: /dashboard/*. Access is checked where data is read: (app)/layout calls
+  auth.protect() and every admin call in lib/server/gateway.ts requires a user.
+- The dashboard server calls /admin with ADMIN_TOKEN plus X-Tollgate-User: <Clerk
+  user id>. The gateway trusts the header only alongside ADMIN_TOKEN (which never
+  reaches a browser) and scopes keys, logs, stats and activity to that owner.
+  ADMIN_TOKEN without the header is the operator view of everything.
+- Self-serve caps (USER_MAX_KEYS / USER_MAX_RPM / USER_MAX_DAILY_TOKENS) protect the
+  shared GEMINI_API_KEY; GET /admin/me reports them to the dashboard.
+
 ## Request flow: POST /v1/chat/completions
 1. Auth: hash the Bearer key (SHA-256). Look it up in Redis (key:{hash}), else
    Neon, then cache it for 60s. Unknown or revoked -> 401.
@@ -89,10 +100,12 @@ flowchart LR
 | GET    | /admin/logs           | Paginated logs, filters: key, alias, status|
 | GET    | /admin/aliases        | Aliases with their model chains          |
 | GET    | /admin/activity       | Daily totals for the activity heatmap    |
+| GET    | /admin/me             | Caller's scope, active keys and caps     |
 
 ## Data model (Neon)
 api_keys: id uuid pk, name text, key_hash text unique, prefix text, rpm int,
-daily_token_quota int, created_at timestamptz, revoked_at timestamptz null
+daily_token_quota int, created_at timestamptz, revoked_at timestamptz null,
+owner_id text null (Clerk user id; added by an idempotent startup migration)
 
 request_logs: id bigserial pk, ts timestamptz, key_id uuid fk, alias text,
 model_used text, in_tokens int, out_tokens int, latency_ms int, status int,

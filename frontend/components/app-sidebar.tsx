@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { BookOpenIcon } from "lucide-react";
 
 import { GatewayStatus } from "@/components/gateway-status";
+import { LogoMark } from "@/components/logo";
 import {
   Sidebar,
   SidebarContent,
@@ -31,10 +32,8 @@ export function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/" />} tooltip="Tollgate">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground">
-                T
-              </span>
+            <SidebarMenuButton size="lg" render={<Link href="/dashboard" />} tooltip="Tollgate">
+              <LogoMark />
               <span className="flex flex-col leading-tight">
                 <span className="font-semibold text-sidebar-accent-foreground">Tollgate</span>
                 <span className="text-xs text-muted-foreground">LLM gateway</span>

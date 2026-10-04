@@ -2,6 +2,8 @@
 
 import { usePathname } from "next/navigation";
 
+import { UserButton } from "@clerk/nextjs";
+
 import { CommandMenu } from "@/components/command-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Separator } from "@/components/ui/separator";
@@ -19,6 +21,9 @@ export function SiteHeader() {
       <div className="ml-auto flex items-center gap-1">
         <CommandMenu />
         <ThemeToggle />
+        <div className="ml-1 flex size-7 items-center justify-center">
+          <UserButton />
+        </div>
       </div>
     </header>
   );

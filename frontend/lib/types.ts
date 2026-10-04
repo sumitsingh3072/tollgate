@@ -93,3 +93,6 @@ export type RequestLog = {
 export type LogPage = { items: RequestLog[]; next_cursor: number | null };
 
 export type AliasInfo = { id: string; chain: string[]; terse: boolean };
+
+export type UserLimits = { max_keys: number; max_rpm: number; max_daily_tokens: number };
+export type Me = { owner_id: string | null; active_keys: number; limits: UserLimits | null };

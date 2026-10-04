@@ -175,3 +175,15 @@ class AliasOut(BaseModel):
     id: str
     chain: list[str] = Field(description="Upstream models in fallback order")
     terse: bool
+
+
+class UserLimits(BaseModel):
+    max_keys: int
+    max_rpm: int
+    max_daily_tokens: int
+
+
+class Me(BaseModel):
+    owner_id: str | None = Field(description="None for the operator (ADMIN_TOKEN only)")
+    active_keys: int
+    limits: UserLimits | None = Field(description="Self-serve caps; None for the operator")

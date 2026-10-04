@@ -9,7 +9,7 @@ import { OverviewContent, OverviewSkeleton } from "./_components/overview";
 
 const WINDOW_HOURS = [24, 168, 720] as const;
 
-export default async function OverviewPage({ searchParams }: PageProps<"/">) {
+export default async function OverviewPage({ searchParams }: PageProps<"/dashboard">) {
   const hours = intParam(await searchParams, "hours", WINDOW_HOURS) ?? 24;
 
   return (

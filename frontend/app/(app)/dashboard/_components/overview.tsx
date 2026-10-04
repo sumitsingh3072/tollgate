@@ -76,10 +76,10 @@ export async function OverviewContent({ hours }: { hours: number }) {
           <EmptyDescription>Create a key and send a request from the Playground to see it here.</EmptyDescription>
         </EmptyHeader>
         <EmptyContent className="flex-row justify-center gap-2">
-          <Button size="sm" render={<Link href="/keys" />}>
+          <Button size="sm" render={<Link href="/dashboard/keys" />}>
             Create a key
           </Button>
-          <Button size="sm" variant="outline" render={<Link href="/playground" />}>
+          <Button size="sm" variant="outline" render={<Link href="/dashboard/playground" />}>
             Open Playground
           </Button>
         </EmptyContent>

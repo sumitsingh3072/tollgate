@@ -17,6 +17,8 @@ class ApiKey(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(Text)
     key_hash: Mapped[str] = mapped_column(Text, unique=True)
+    # Clerk user id of the self-serve owner; NULL for operator-created keys.
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     prefix: Mapped[str] = mapped_column(Text)
     rpm: Mapped[int] = mapped_column(Integer)
     daily_token_quota: Mapped[int] = mapped_column(Integer)
