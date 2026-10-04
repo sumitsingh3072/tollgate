@@ -76,9 +76,14 @@ Done when: demo-failover fails over cleanly and a repeated request returns
 cache: hit.
 
 ## Phase 4: Logging and analytics
-- [ ] asyncio queue + background flusher, batch insert every 2s; drain on shutdown
-- [ ] GET /admin/stats: totals, tokens by key, cache hit rate, error rate, p50/p95
-- [ ] GET /admin/logs: pagination + filters
+- [x] In-memory buffer + background flusher, batch insert every 2s; final flush on
+      shutdown; failed batches retried; buffer capped (drops, never blocks)
+- [x] One log event per authenticated request: success, cache hit, 4xx/5xx/429,
+      and streams (logged when the stream ends)
+- [x] GET /admin/stats?hours=: totals, tokens by key and by model, cache hit rate,
+      error rate, p50/p95 (percentile_cont)
+- [x] GET /admin/logs: keyset pagination (before/next_cursor) + filters (key_id,
+      alias, status, errors_only)
 Done when: stats reflect requests just made; no DB call on the request path.
 
 ## Phase 5: Dashboard (shadcn, Linear-style, light + dark)

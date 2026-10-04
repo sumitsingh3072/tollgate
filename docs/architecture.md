@@ -96,6 +96,9 @@ cache_hit bool, fallback_used bool
 Indexes: (ts), (key_id, ts)
 
 Percentiles via SQL: percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms).
+ts is set by the gateway when the request starts (not at insert time). out_tokens =
+total_tokens - prompt_tokens, so in + out equals what the quota was charged. Cache
+hits are logged with 0 tokens. /admin/logs pages newest-first by id (keyset cursor).
 Tables created with metadata.create_all on startup (no Alembic).
 
 ## Folder structure
@@ -126,7 +129,7 @@ tollgate/
 │   │   │   ├── session.py
 │   │   │   ├── models.py
 │   │   │   └── queries.py
-│   │   └── logging_queue.py
+│   │   └── logging_queue.py   # RequestRecord -> LogEvent buffer, 2s batch flusher
 │   ├── tests/
 │   ├── mock_upstream.py
 │   ├── scripts/smoke_openai.py  # OpenAI SDK end-to-end check against a running gateway

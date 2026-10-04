@@ -31,7 +31,8 @@ class RequestLog(Base):
         Index("ix_request_logs_key_id_ts", "key_id", "ts"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # SQLite (tests) only auto-increments INTEGER primary keys; Postgres gets BIGSERIAL.
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     key_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("api_keys.id"), nullable=True)
     alias: Mapped[str] = mapped_column(Text)

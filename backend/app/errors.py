@@ -13,6 +13,9 @@ from app.logging_setup import request_id_var
 
 log = logging.getLogger("tollgate.errors")
 
+# Infrastructure failures reported as 503 service_unavailable.
+DEPENDENCY_ERRORS: tuple[type[Exception], ...] = (RedisError, SQLAlchemyError, OSError)
+
 _TYPE_BY_STATUS = {
     400: "invalid_request_error",
     401: "authentication_error",
@@ -74,12 +77,12 @@ def install_error_handlers(app: FastAPI) -> None:
         message = f"{loc}: {first.get('msg', 'invalid request')}" if loc else first.get("msg", "invalid request")
         return error_response(422, "invalid_request_error", message)
 
-    @app.exception_handler(RedisError)
-    @app.exception_handler(SQLAlchemyError)
-    @app.exception_handler(OSError)
     async def _dependency_down(_: Request, exc: Exception) -> JSONResponse:
         log.error("dependency unavailable", extra={"error": repr(exc)})
         return error_response(503, "service_unavailable", "A gateway dependency is unavailable; retry shortly.")
+
+    for exc_type in DEPENDENCY_ERRORS:
+        app.add_exception_handler(exc_type, _dependency_down)
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:

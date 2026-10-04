@@ -17,6 +17,7 @@ from app.core import tasks
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.errors import install_error_handlers
+from app.logging_queue import LogQueue
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
 
@@ -51,11 +52,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Keep serving; /health reports db=false until the DB is reachable.
         log.exception("database init failed; continuing without schema check")
 
+    app.state.log_queue = LogQueue(app.state.sessionmaker, settings.log_flush_interval)
+    app.state.log_queue.start()
+
     log.info("gateway started", extra={"env": settings.environment, "aliases": ",".join(app.state.aliases)})
     try:
         yield
     finally:
         await tasks.drain()
+        await app.state.log_queue.stop()  # final flush before the engine closes
         await app.state.http.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()
