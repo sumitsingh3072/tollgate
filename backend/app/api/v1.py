@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.config import Alias, Upstream
 from app.core import cache, fallback, limits, proxy, tasks, terse, usage
 from app.core.coalesce import Flight, Role
+from app.core.fair_queue import Ticket
 from app.core.keys import KeyRecord
 from app.core.tags import TAGS_HEADER, parse_tags
 from app.deps import require_api_key
@@ -125,11 +126,21 @@ class _Context:
         return f"{self.key_for_cache}:{mode}"
 
     def headers(self, flight: Flight, role: Role) -> dict[str, str]:
+        waited = 0 if role == "follower" else flight.queue_wait_ms or 0
         return {
             **self.limit.headers(),
             **_tollgate_headers(flight.model or "", self.record.cache_status or "bypass", flight.fallback_used),
             "x-tollgate-coalesce": role,
+            "x-tollgate-queue-wait-ms": str(waited),
         }
+
+    @property
+    def key_id(self) -> str:
+        return str(self.key.id)
+
+    def waited(self, flight: Flight, ticket: Ticket | None) -> None:
+        if ticket is not None:
+            flight.queue_wait_ms = (flight.queue_wait_ms or 0) + ticket.wait_ms
 
 
 def _apply_flight(record: RequestRecord, flight: Flight, role: Role) -> None:
@@ -142,10 +153,17 @@ def _apply_flight(record: RequestRecord, flight: Flight, role: Role) -> None:
 async def _complete(ctx: _Context) -> JSONResponse:
     state, record = ctx.state, ctx.record
 
+    queue = state.fair_queue
+
     async def lead(flight: Flight) -> dict[str, Any]:
         async def call(upstream: Upstream) -> dict[str, Any]:
             payload = proxy.build_payload(ctx.client_body, upstream)
-            return await proxy.complete(state.http, record.alias, upstream, payload)
+            async with queue.slot(upstream.model, ctx.key_id, ctx.key.prefix) as ticket:
+                ctx.waited(flight, ticket)
+                queue.charge(ctx.key_id, input_tokens=usage.estimate_tokens(ctx.prompt))
+                value = await proxy.complete(state.http, record.alias, upstream, payload)
+                queue.charge(ctx.key_id, output_tokens=usage.from_completion(value, ctx.prompt).completion_tokens)
+                return value
 
         result = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, call)
         flight.set_meta(result.upstream.model, result.fallback_used)
@@ -190,16 +208,33 @@ async def _store(
 async def _stream(ctx: _Context) -> StreamingResponse:
     state, record = ctx.state, ctx.record
 
+    queue = state.fair_queue
+
     async def lead(flight: Flight) -> None:
-        async def open_(upstream: Upstream) -> AsyncIterator[bytes]:
+        async def open_(upstream: Upstream) -> tuple[AsyncIterator[bytes], Ticket | None]:
             payload = proxy.build_payload(ctx.client_body, upstream)
-            return await proxy.open_stream(state.http, record.alias, upstream, payload)
+            ticket = await queue.acquire(upstream.model, ctx.key_id, ctx.key.prefix)
+            ctx.waited(flight, ticket)
+            queue.charge(ctx.key_id, input_tokens=usage.estimate_tokens(ctx.prompt))
+            try:
+                return await proxy.open_stream(state.http, record.alias, upstream, payload), ticket
+            except BaseException:
+                queue.release(upstream.model, ticket)
+                raise
 
         # Fallback is possible until the first byte: open_stream checks the upstream status first.
         streamed = await fallback.run_chain(record.alias, ctx.alias.chain, state.breakers, open_)
+        chunks, ticket = streamed.value
         flight.set_meta(streamed.upstream.model, streamed.fallback_used)
-        async for chunk in streamed.value:
-            await flight.emit(chunk)
+        meter = usage.SSEUsageTracker("")
+        try:  # the model slot is held until the stream ends
+            async for chunk in chunks:
+                before = meter.content_chars
+                meter.feed(chunk)
+                queue.charge(ctx.key_id, output_tokens=(meter.content_chars - before) / 4)
+                await flight.emit(chunk)
+        finally:
+            queue.release(streamed.upstream.model, ticket)
 
     flight, role = state.coalescer.join(ctx.coalesce_key("sse"), lead)
     try:

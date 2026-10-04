@@ -166,12 +166,15 @@ Spec: "Every token pays the toll": avoid repeated work, share capacity fairly, p
 - [x] Metrics tollgate_coalesced_requests_total{role}; /admin/coalesce/stats
 
 ## Phase 10: Fair queuing (VTC)
-- [ ] Gateway-owned concurrency per upstream model (UPSTREAM_MAX_PARALLEL) so the provider's
-      own queue stays empty
-- [ ] Virtual Token Counter per key (input + 2 x output, charged while streaming), lowest
-      counter dispatches first, counter lift for newly active keys, optional weights
-- [ ] Backpressure: FAIR_MAX_QUEUE_PER_KEY, FAIR_MAX_WAIT_S -> 429 + Retry-After;
-      x-tollgate-queue-wait-ms; queue depth / wait metrics; /admin/fairness (Jain's index)
+- [x] Gateway-owned concurrency per upstream model (UPSTREAM_MAX_PARALLEL; Ollama's
+      OLLAMA_NUM_PARALLEL follows it) so the provider's own queue stays empty
+- [x] Virtual Token Counter per key (input + 2 x output, charged at dispatch and while streaming),
+      lowest counter dispatches first, counter lift for newly active keys; only coalescing
+      leaders take slots. (Per-key weights: supported by the scheduler, not exposed yet.)
+- [x] Backpressure: FAIR_MAX_QUEUE_PER_KEY (queue_full), FAIR_MAX_WAIT_S (queue_timeout) -> 429
+      + Retry-After; x-tollgate-queue-wait-ms; tollgate_queue_depth / tollgate_queue_wait_seconds;
+      /admin/fairness (tokens, share, wait p95, live depth, VTC counters, Jain's index)
+- [x] FAIR_QUEUE_MODE=fair|fifo|off for benchmarking
 
 ## Phase 11: Shared cache, stream caching, dashboard pages, benchmarks
 - [ ] Shared scope (opt-in per route) with per-key insert budgets; hide x-tollgate-cache there

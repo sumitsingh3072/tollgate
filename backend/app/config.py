@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     cache_seen_ttl: int = 3_600  # second-sight admission window
     # Identical in-flight requests share one upstream call (per process: run one worker).
     coalescing_enabled: bool = True
+
+    # Fair queuing (VTC): the gateway owns the per-model concurrency so the provider's queue stays
+    # empty. "fifo" and "off" exist for benchmarking.
+    fair_queue_mode: Literal["fair", "fifo", "off"] = "fair"
+    upstream_max_parallel: int = 4  # in-flight requests per upstream model (Ollama: OLLAMA_NUM_PARALLEL)
+    fair_max_queue_per_key: int = 20
+    fair_max_wait_s: float = 30.0
+    fair_output_weight: float = 2.0  # output tokens cost more than input, as in the VTC paper
     breaker_failure_threshold: int = 3
     breaker_open_seconds: float = 30.0
 

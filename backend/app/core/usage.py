@@ -65,6 +65,7 @@ class SSEUsageTracker:
         self._buffer = b""
         self._usage: Usage | None = None
         self._content: list[str] = []
+        self._chars = 0
 
     def feed(self, chunk: bytes) -> None:
         self._buffer += chunk
@@ -89,10 +90,15 @@ class SSEUsageTracker:
             content = (choice.get("delta") or {}).get("content") if isinstance(choice, dict) else None
             if isinstance(content, str):
                 self._content.append(content)
+                self._chars += len(content)
 
     @property
     def content_seen(self) -> bool:
         return bool(self._content)
+
+    @property
+    def content_chars(self) -> int:
+        return self._chars
 
     def result(self) -> Usage:
         if self._buffer:

@@ -64,6 +64,13 @@ flowchart LR
 - Self-serve caps (USER_MAX_KEYS / USER_MAX_RPM / USER_MAX_DAILY_TOKENS) protect the
   shared GEMINI_API_KEY; GET /admin/me reports them to the dashboard.
 
+## Request pipeline
+auth -> limits -> cache lookup -> coalescing -> fair queue -> model -> stream back -> after-response.
+Cache hits never reach the queue or the model; coalescing followers attach to an in-flight call and
+never queue; only leaders of cache misses take a model slot. Every upstream call runs in a Flight task
+(app/core/coalesce.py) independent of client connections; the fair queue (app/core/fair_queue.py)
+caps in-flight requests per model and orders waiters by a Virtual Token Counter per key.
+
 ## Request flow: POST /v1/chat/completions
 1. Auth: hash the Bearer key (SHA-256). Look it up in Redis (key:{hash}), else
    Neon, then cache it for 60s. Unknown or revoked -> 401.
@@ -115,6 +122,7 @@ flowchart LR
 | GET    | /admin/activity       | Daily totals for the activity heatmap    |
 | GET    | /admin/me             | Caller's scope, active keys and caps     |
 | GET    | /admin/coalesce/stats | Calls saved, share rate, largest fan-out |
+| GET    | /admin/fairness       | Per-key tokens, waits, VTC, Jain's index |
 | GET    | /metrics              | Prometheus (admin token)                 |
 
 ## Data model (Neon)

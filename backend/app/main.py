@@ -15,6 +15,7 @@ from app.api import admin, v1
 from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings, upstream_models
 from app.core import tasks
 from app.core.coalesce import Coalescer
+from app.core.fair_queue import FairQueue
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.deps import require_admin
@@ -34,6 +35,7 @@ TOLLGATE_HEADERS = [
     "x-tollgate-fallback",
     "x-request-id",
     "x-tollgate-coalesce",
+    "x-tollgate-queue-wait-ms",
     "x-ratelimit-limit-requests",
     "x-ratelimit-remaining-requests",
     "x-ratelimit-limit-tokens",
@@ -112,6 +114,13 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
     app.state.aliases = build_aliases(settings)
     app.state.breakers = CircuitBreakers(settings.breaker_failure_threshold, settings.breaker_open_seconds)
     app.state.coalescer = Coalescer()
+    app.state.fair_queue = FairQueue(
+        mode=settings.fair_queue_mode,
+        parallel=settings.upstream_max_parallel,
+        max_queue=settings.fair_max_queue_per_key,
+        max_wait_s=settings.fair_max_wait_s,
+        output_weight=settings.fair_output_weight,
+    )
 
     # Order matters: the last-added middleware is outermost, so request ids wrap CORS too.
     app.add_middleware(

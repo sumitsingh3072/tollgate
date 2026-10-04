@@ -90,6 +90,9 @@ services:
     <<: *restart
     profiles: ["ollama"]
     image: ollama/ollama:latest
+    environment:
+      # Same slot count as the gateway's fair queue, so Ollama's own FIFO queue stays empty.
+      OLLAMA_NUM_PARALLEL: ${UPSTREAM_MAX_PARALLEL:-4}
     volumes:
       - ollama:/root/.ollama
     healthcheck:

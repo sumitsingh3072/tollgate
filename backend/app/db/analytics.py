@@ -185,6 +185,42 @@ async def counts_by(session: AsyncSession, window: Window, column: Any) -> dict[
     return {value: int(n) for value, n in result.all()}
 
 
+@dataclass(frozen=True)
+class QueueWaitRow:
+    key_id: uuid.UUID | None
+    p95_ms: float | None
+    avg_ms: float | None
+
+
+async def queue_wait_by_key(session: AsyncSession, window: Window) -> list[QueueWaitRow]:
+    """Queue wait per key, over requests that actually took a model slot."""
+    waited = window.where() & RequestLog.queue_wait_ms.is_not(None)
+    if _is_postgres(session):
+        result = await session.execute(
+            select(
+                RequestLog.key_id,
+                func.percentile_cont(0.95).within_group(RequestLog.queue_wait_ms.asc()),
+                func.avg(RequestLog.queue_wait_ms),
+            )
+            .where(waited)
+            .group_by(RequestLog.key_id)
+        )
+        return [QueueWaitRow(k, p95, float(avg) if avg is not None else None) for k, p95, avg in result.all()]
+    rows = (await session.execute(select(RequestLog.key_id, RequestLog.queue_wait_ms).where(waited))).all()
+    by_key: dict[uuid.UUID | None, list[int]] = {}
+    for key_id, wait in rows:
+        by_key.setdefault(key_id, []).append(wait)
+    return [QueueWaitRow(k, percentile(sorted(v), 0.95), sum(v) / len(v)) for k, v in by_key.items()]
+
+
+def jain_index(values: list[float]) -> float | None:
+    """Jain's fairness index: 1.0 = perfectly even, 1/n = one party got everything."""
+    values = [v for v in values if v > 0]
+    if not values:
+        return None
+    return (sum(values) ** 2) / (len(values) * sum(v * v for v in values))
+
+
 async def usage_by_key(session: AsyncSession, window: Window) -> list[KeyUsageRow]:
     tokens = func.coalesce(func.sum(TOKENS), 0)
     result = await session.execute(

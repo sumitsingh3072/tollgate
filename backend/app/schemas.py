@@ -204,3 +204,31 @@ class CoalesceStats(BaseModel):
     in_flight: int = Field(description="Coalescable upstream calls running now")
     largest_fanout_since_start: int
     flights_since_start: int
+
+
+class KeyFairness(BaseModel):
+    key_id: uuid.UUID | None
+    name: str | None
+    prefix: str | None
+    requests: int
+    tokens: int
+    share: float = Field(description="Fraction of all tokens served in the window")
+    queue_wait_p95_ms: float | None
+    queue_wait_avg_ms: float | None
+    queued_now: int
+    virtual_tokens: float = Field(description="VTC counter (input + output_weight x output) since start")
+
+
+class ModelQueue(BaseModel):
+    model: str
+    parallel: int
+    running: int
+    queued: int
+
+
+class Fairness(BaseModel):
+    window_hours: int
+    mode: str
+    jain_index: float | None = Field(description="Over tokens served per key; 1.0 = perfectly even")
+    keys: list[KeyFairness]
+    models: list[ModelQueue]

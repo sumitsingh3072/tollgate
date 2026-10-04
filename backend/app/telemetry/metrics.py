@@ -4,9 +4,12 @@ Single-process registry: the gateway runs one uvicorn worker (coalescing and fai
 per-process too).
 """
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from typing import TYPE_CHECKING
 
-from app.logging_queue import LogEvent
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+
+if TYPE_CHECKING:
+    from app.logging_queue import LogEvent
 
 TOKEN_BUCKETS = (1, 4, 16, 64, 256, 1024, 4096, 16384, 65536)
 DURATION_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120)
@@ -34,9 +37,13 @@ cache_admission_rejected = Counter(
     "tollgate_cache_admission_rejected_total", "Cacheable responses not stored on first sighting."
 )
 coalesced_requests = Counter("tollgate_coalesced_requests_total", "Requests that shared an upstream call.", ["role"])
+queue_depth = Gauge("tollgate_queue_depth", "Requests waiting for an upstream model slot.", ["key_prefix"])
+queue_wait = Histogram(
+    "tollgate_queue_wait_seconds", "Time waited for an upstream model slot.", ["model"], buckets=DURATION_BUCKETS
+)
 
 
-def observe(event: LogEvent) -> None:
+def observe(event: "LogEvent") -> None:
     """Record one finished request. Cheap, in-process, no I/O."""
     alias = event.alias
     operation_duration.labels(alias, f"{event.status // 100}xx").observe(event.latency_ms / 1000)

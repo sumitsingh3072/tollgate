@@ -17,15 +17,18 @@ from app.schemas import (
     ActivityDay,
     AliasOut,
     CoalesceStats,
+    Fairness,
     GroupUsage,
     KeyCreate,
     KeyCreated,
+    KeyFairness,
     KeyOut,
     KeyUsage,
     LatencyBin,
     LogOut,
     LogPage,
     Me,
+    ModelQueue,
     PeriodTotals,
     SeriesPoint,
     Stats,
@@ -73,7 +76,9 @@ async def create_key(body: KeyCreate, request: Request, scope: AdminScope = Depe
             owner_id=scope.owner_id,
         )
     # Overwrite any negative cache entry so the key works immediately.
-    record = keys.KeyRecord(id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota)
+    record = keys.KeyRecord(
+        id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota, prefix=row.prefix
+    )
     await keys.cache_set(request.app.state.redis, key_hash, record, request.app.state.settings.key_cache_ttl)
     log.info("key created", extra={"key_id": str(row.id), "prefix": row.prefix, "owner": scope.owner_id or "operator"})
     return KeyCreated(**KeyOut.model_validate(row).model_dump(), key=raw)
@@ -174,6 +179,62 @@ async def coalesce_stats(
         in_flight=coalescer.in_flight,
         largest_fanout_since_start=coalescer.stats.largest_fanout,
         flights_since_start=coalescer.stats.flights,
+    )
+
+
+@router.get("/fairness")
+async def fairness(
+    request: Request,
+    hours: int = Query(default=1, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> Fairness:
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    usage, waits, owned = await analytics.run_concurrently(
+        request.app.state.sessionmaker,
+        lambda s: analytics.usage_by_key(s, window),
+        lambda s: analytics.queue_wait_by_key(s, window),
+        lambda s: queries.list_keys(s, scope.owner_id),
+    )
+    queue = request.app.state.fair_queue
+    visible = {str(k.id) for k in owned}
+    queued: dict[str, int] = {}
+    for scheduler in queue.schedulers.values():
+        for key_id, depth in scheduler.depth_by_key().items():
+            queued[key_id] = queued.get(key_id, 0) + depth
+    counters = queue.counters.snapshot()
+    wait_by_key = {w.key_id: w for w in waits}
+    total = sum(u.tokens for u in usage) or 1
+    keys_out = [
+        KeyFairness(
+            key_id=u.key_id,
+            name=u.name,
+            prefix=u.prefix,
+            requests=u.requests,
+            tokens=u.tokens,
+            share=round(u.tokens / total, 4),
+            queue_wait_p95_ms=wait_by_key[u.key_id].p95_ms if u.key_id in wait_by_key else None,
+            queue_wait_avg_ms=wait_by_key[u.key_id].avg_ms if u.key_id in wait_by_key else None,
+            queued_now=queued.get(str(u.key_id), 0),
+            virtual_tokens=round(counters.get(str(u.key_id), 0.0), 1),
+        )
+        for u in usage
+    ]
+    models = [
+        ModelQueue(
+            model=s.model,
+            parallel=s.parallel,
+            running=s.running,
+            # A user only sees their own waiting requests; the operator sees all.
+            queued=sum(d for k, d in s.depth_by_key().items() if scope.is_operator or k in visible),
+        )
+        for s in queue.schedulers.values()
+    ]
+    return Fairness(
+        window_hours=hours,
+        mode=queue.mode,
+        jain_index=analytics.jain_index([float(u.tokens) for u in usage]),
+        keys=keys_out,
+        models=models,
     )
 
 
