@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -16,10 +16,12 @@ from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_setting
 from app.core import tasks
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
+from app.deps import require_admin
 from app.errors import install_error_handlers
 from app.logging_queue import LogQueue
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
+from app.telemetry import metrics
 
 log = logging.getLogger("tollgate")
 
@@ -55,6 +57,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    app.state.redis_cache = (
+        aioredis.from_url(settings.redis_cache_url, decode_responses=True)
+        if settings.redis_cache_url
+        else app.state.redis
+    )
     app.state.engine = create_engine(settings.database_url)
     app.state.sessionmaker = create_sessionmaker(app.state.engine)
     try:
@@ -80,6 +87,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await tasks.drain()
         await app.state.log_queue.stop()  # final flush before the engine closes
         await app.state.http.aclose()
+        if app.state.redis_cache is not app.state.redis:
+            await app.state.redis_cache.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()
         log.info("gateway stopped")
@@ -113,6 +122,18 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
 
     app.include_router(v1.router)
     app.include_router(admin.router)
+
+    @app.get("/metrics", tags=["ops"], dependencies=[Depends(require_admin)], include_in_schema=False)
+    async def prometheus_metrics() -> Response:
+        """Prometheus exposition format. Scrape with `authorization: {credentials: <ADMIN_TOKEN>}`."""
+        content, media_type = metrics.render()
+        return Response(content, media_type=media_type)
+
+    @app.get("/health/live", tags=["ops"])
+    async def live() -> dict[str, str]:
+        """Liveness for container orchestrators: the process is up. No dependency checks, so a slow
+        database or a missing API key never gets a healthy gateway restarted."""
+        return {"status": "ok"}
 
     @app.get("/health", tags=["ops"])
     async def health(request: Request) -> dict[str, object]:

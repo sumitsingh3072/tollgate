@@ -65,15 +65,13 @@ async def test_request_path_only_buffers(client, auth, app: FastAPI, gemini) -> 
 
 async def test_every_outcome_is_logged(client, auth, app: FastAPI, gemini, settings: Settings) -> None:
     async def sse() -> AsyncIterator[bytes]:
+        yield b'data: {"choices":[{"delta":{"content":"hi"},"index":0}]}\n\n'
         yield b'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":9}}\n\n'
 
     gemini.mock(return_value=httpx.Response(200, json=completion(total=12)))
-    await client.post(
-        "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "temperature": 0}, headers=auth
-    )
-    await client.post(
-        "/v1/chat/completions", json={"model": "fast", "messages": MESSAGES, "temperature": 0}, headers=auth
-    )
+    deterministic = {"model": "fast", "messages": MESSAGES, "temperature": 0}
+    for _ in range(3):  # first sighting not stored, second stored, third served from cache
+        await client.post("/v1/chat/completions", json=deterministic, headers=auth)
     await client.post("/v1/chat/completions", json={"model": "nope", "messages": MESSAGES}, headers=auth)
     gemini.mock(return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse()))
     async with client.stream(
@@ -83,7 +81,13 @@ async def test_every_outcome_is_logged(client, auth, app: FastAPI, gemini, setti
     await app.state.log_queue.flush()
 
     page = (await client.get("/admin/logs", headers=ADMIN_HEADERS)).json()
-    stream_log, unknown_alias, cache_hit, miss = page["items"]  # newest first
+    stream_log, unknown_alias, cache_hit, miss, rejected = page["items"]  # newest first
+    assert (rejected["cache_status"], miss["cache_status"], cache_hit["cache_status"]) == (
+        "admission_rejected",
+        "miss",
+        "hit",
+    )
+    assert stream_log["cache_status"] == "bypass" and stream_log["ttft_ms"] is not None
     assert (miss["status"], miss["cache_hit"], miss["in_tokens"], miss["out_tokens"]) == (200, False, 4, 8)
     assert miss["model_used"] == settings.gemini_fast_model and miss["key_prefix"].startswith("tg_live_")
     assert (cache_hit["cache_hit"], cache_hit["in_tokens"] + cache_hit["out_tokens"]) == (True, 0)

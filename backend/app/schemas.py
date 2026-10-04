@@ -164,6 +164,12 @@ class LogOut(BaseModel):
     status: int
     cache_hit: bool
     fallback_used: bool
+    cache_status: str | None = None
+    cache_scope: str | None = None
+    coalesce_role: str | None = None
+    queue_wait_ms: int | None = None
+    ttft_ms: int | None = None
+    tags: dict[str, str] | None = None
 
 
 class LogPage(BaseModel):

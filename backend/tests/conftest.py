@@ -78,6 +78,7 @@ def make_app(settings: Settings, http: httpx.AsyncClient, redis: FakeAsyncRedis,
     def _make(redis_up: bool = True, db_up: bool = True) -> FastAPI:
         app = create_app(settings, use_lifespan=False)
         app.state.redis = redis if redis_up else DownRedis()
+        app.state.redis_cache = app.state.redis
         app.state.engine = engine if db_up else DownEngine()
         app.state.sessionmaker = create_sessionmaker(engine)
         app.state.http = http

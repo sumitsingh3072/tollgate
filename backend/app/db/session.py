@@ -20,6 +20,12 @@ def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]
 _POSTGRES_MIGRATIONS = (
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS owner_id TEXT",
     "CREATE INDEX IF NOT EXISTS ix_api_keys_owner_id ON api_keys (owner_id)",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS cache_status TEXT",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS cache_scope TEXT",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS coalesce_role TEXT",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS ttft_ms INTEGER",
+    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS tags JSONB",
 )
 
 

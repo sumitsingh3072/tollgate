@@ -140,7 +140,46 @@ logs and stats; signed-out visitors see the landing page and get redirected from
 Done when: a clean copy with only GEMINI_API_KEY in .env comes up with
 `docker compose up -d`, the dashboard opens without sign-in, and a chat is answered.
 
-## Phase 8: Hardening and ship
+## Phase 8: Advanced features, quick wins (cache core + visibility core)
+Spec: "Every token pays the toll": avoid repeated work, share capacity fairly, prove it.
+- [x] Separate response-cache Redis (allkeys-lfu, maxmemory, lfu-decay) from the state Redis
+      (noeviction), so cache pressure can never evict limits or quotas
+- [x] Eligibility: temperature 0 (or route opt-in), no tools/n>1; store only finish_reason
+      "stop", no tool calls, <= CACHE_MAX_ENTRY_BYTES
+- [x] Canonical key sha256(scope | alias | canonical request) with normalized message text;
+      private scope (API key id) by default
+- [x] Admission on second sight (simplified TinyLFU): "seen:" marker first, store on repeat
+- [x] Per-route TTL (default 24h); x-tollgate-cache = hit | miss | admission_rejected |
+      ineligible | bypass
+- [x] request_logs: cache_status, cache_scope, coalesce_role, queue_wait_ms, ttft_ms, tags
+      (idempotent migrations); x-tollgate-tags header; log filters by cache_status / tag
+- [x] /metrics (Prometheus, admin token): GenAI token usage, duration, TTFT; cache counters
+- [x] /health/live liveness endpoint (container healthcheck) separate from /health readiness
+
+## Phase 9: Request coalescing
+- [ ] Flight registry keyed by the cache key; leader runs upstream as its own task, followers
+      replay buffered chunks then wait; late joiners get the full response
+- [ ] Cancellation safety (cancel upstream only when subscribers == 0), shared errors
+- [ ] Billing per receiving key; coalesce_role logged; admit to cache when >= 2 followers
+- [ ] Metrics tollgate_coalesced_requests_total{role}; /admin/coalesce/stats
+
+## Phase 10: Fair queuing (VTC)
+- [ ] Gateway-owned concurrency per upstream model (UPSTREAM_MAX_PARALLEL) so the provider's
+      own queue stays empty
+- [ ] Virtual Token Counter per key (input + 2 x output, charged while streaming), lowest
+      counter dispatches first, counter lift for newly active keys, optional weights
+- [ ] Backpressure: FAIR_MAX_QUEUE_PER_KEY, FAIR_MAX_WAIT_S -> 429 + Retry-After;
+      x-tollgate-queue-wait-ms; queue depth / wait metrics; /admin/fairness (Jain's index)
+
+## Phase 11: Shared cache, stream caching, dashboard pages, benchmarks
+- [ ] Shared scope (opt-in per route) with per-key insert budgets; hide x-tollgate-cache there
+- [ ] Cache streamed responses (collect chunks) and replay hits as SSE
+- [ ] /admin/cache/stats (hit rate, memory vs limit, evictions, rejections, hits per MB)
+- [ ] Dashboard: Cache and Fairness pages; coalescing cards on Overview; TTFT on Overview
+- [ ] Mock upstream success mode; bench/ workload (Zipf + one-hit wonders), cache_bench,
+      coalesce_bench, fair_bench; publish measured results only
+
+## Phase 12: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
 - [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table

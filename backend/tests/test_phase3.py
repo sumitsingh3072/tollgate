@@ -1,15 +1,12 @@
 import json
-import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 import httpx
 import pytest
 import respx
-from fakeredis import FakeAsyncRedis
 
 from app.config import Settings, Upstream
-from app.core import cache, limits, terse
+from app.core import terse
 from app.core.fallback import CircuitBreakers
 
 pytestmark = pytest.mark.respx(assert_all_called=False)
@@ -39,53 +36,6 @@ def mock_upstream(settings: Settings, respx_mock: respx.MockRouter) -> respx.Rou
 
 async def post(client: httpx.AsyncClient, auth: dict[str, str], **body) -> httpx.Response:
     return await client.post("/v1/chat/completions", json={"messages": MESSAGES, **body}, headers=auth)
-
-
-# --- cache -----------------------------------------------------------------------------------
-
-
-async def test_temperature_zero_is_cached(client, auth, gemini, redis: FakeAsyncRedis, settings: Settings) -> None:
-    gemini.mock(return_value=httpx.Response(200, json=completion(total=40)))
-
-    first = await post(client, auth, model="fast", temperature=0)
-    second = await post(client, auth, model="fast", temperature=0)
-
-    assert first.headers["x-tollgate-cache"] == "miss"
-    assert second.headers["x-tollgate-cache"] == "hit"
-    assert second.headers["x-tollgate-model"] == settings.gemini_fast_model
-    assert second.json() == first.json()
-    assert gemini.call_count == 1
-    keys = (await client.get("/admin/keys", headers={"Authorization": "Bearer test-admin"})).json()
-    key_id = uuid.UUID(keys[0]["id"])
-    assert await redis.get(limits.token_key(key_id, datetime.now(UTC))) == "40"  # hit not billed
-
-
-@pytest.mark.parametrize("extra", [{"temperature": 0.7}, {}, {"temperature": 0, "stream": True}])
-async def test_non_deterministic_or_stream_bypasses_cache(client, auth, gemini, extra: dict) -> None:
-    async def sse() -> AsyncIterator[bytes]:
-        yield b"data: [DONE]\n\n"
-
-    gemini.mock(
-        side_effect=lambda req: (
-            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse())
-            if json.loads(req.content).get("stream")
-            else httpx.Response(200, json=completion())
-        )
-    )
-
-    await post(client, auth, model="fast", **extra)
-    resp = await post(client, auth, model="fast", **extra)
-
-    assert resp.headers["x-tollgate-cache"] == "bypass"
-    assert gemini.call_count == 2
-
-
-def test_cache_key_canonical() -> None:
-    a = {"model": "fast", "messages": MESSAGES, "temperature": 0, "user": "u1"}
-    b = {"temperature": 0, "messages": MESSAGES, "model": "fast", "user": "u2", "stream": False}
-    assert cache.cache_key(a) == cache.cache_key(b)
-    assert cache.cache_key(a) != cache.cache_key({**a, "max_tokens": 10})
-    assert cache.cache_key(a) != cache.cache_key({**a, "model": "smart"})
 
 
 # --- fallback + circuit breaker -------------------------------------------------------------

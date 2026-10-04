@@ -80,6 +80,9 @@ class LogFilters:
     alias: str | None = None
     status: int | None = None
     errors_only: bool = False
+    cache_status: str | None = None
+    coalesce_role: str | None = None
+    tag: tuple[str, str] | None = None
 
 
 async def list_logs(
@@ -104,5 +107,12 @@ async def list_logs(
         query = query.where(RequestLog.status == filters.status)
     if filters.errors_only:
         query = query.where(RequestLog.status >= 400)
+    if filters.cache_status is not None:
+        query = query.where(RequestLog.cache_status == filters.cache_status)
+    if filters.coalesce_role is not None:
+        query = query.where(RequestLog.coalesce_role == filters.coalesce_role)
+    if filters.tag is not None:
+        name, value = filters.tag
+        query = query.where(RequestLog.tags[name].as_string() == value)
     result = await session.execute(query)
     return [(row[0], row[1], row[2]) for row in result.all()]

@@ -90,6 +90,10 @@ class SSEUsageTracker:
             if isinstance(content, str):
                 self._content.append(content)
 
+    @property
+    def content_seen(self) -> bool:
+        return bool(self._content)
+
     def result(self) -> Usage:
         if self._buffer:
             self._parse(self._buffer.strip())

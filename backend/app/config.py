@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.cache import CachePolicy
+
 DEFAULT_ADMIN_TOKEN = "change-me"
 
 
@@ -22,7 +24,10 @@ class Settings(BaseSettings):
     log_format: Literal["console", "json"] = "console"
 
     database_url: str = "postgresql+asyncpg://tollgate:tollgate@localhost:5432/tollgate"
+    # State (keys, limits, quotas) must never be evicted; the response cache lives in its own
+    # Redis with allkeys-lfu and a memory cap. Unset REDIS_CACHE_URL = share the state instance.
     redis_url: str = "redis://localhost:6379/0"
+    redis_cache_url: str | None = None
 
     # Where models run: "gemini" (default, Google's hosted API: light on the machine) or "ollama"
     # (fully local; start compose with --profile ollama).
@@ -56,7 +61,9 @@ class Settings(BaseSettings):
     user_max_rpm: int = 120
     user_max_daily_tokens: int = 500_000
 
-    cache_ttl: int = 3600
+    cache_ttl: int = 86_400  # per-route default; stale answers expire even when popular
+    cache_max_entry_bytes: int = 16_384
+    cache_seen_ttl: int = 3_600  # second-sight admission window
     breaker_failure_threshold: int = 3
     breaker_open_seconds: float = 30.0
 
@@ -134,6 +141,7 @@ class Upstream:
 class Alias:
     chain: tuple[Upstream, ...]
     terse: bool = False
+    cache: CachePolicy = field(default_factory=CachePolicy)
 
 
 def upstream_models(settings: Settings) -> tuple[Upstream, Upstream]:
@@ -155,13 +163,14 @@ def upstream_models(settings: Settings) -> tuple[Upstream, Upstream]:
 def build_aliases(settings: Settings) -> dict[str, Alias]:
     fast, smart = upstream_models(settings)
     smart_chain = (smart, fast)
+    cache = CachePolicy(ttl_seconds=settings.cache_ttl)
     # Always-500 upstream first, so failover can be demoed on demand.
     mock = Upstream("mock-500", settings.mock_upstream_url)
     return {
-        "fast": Alias(chain=(fast,)),
-        "smart": Alias(chain=smart_chain),
-        "smart-terse": Alias(chain=smart_chain, terse=True),
-        "demo-failover": Alias(chain=(mock, fast)),
+        "fast": Alias(chain=(fast,), cache=cache),
+        "smart": Alias(chain=smart_chain, cache=cache),
+        "smart-terse": Alias(chain=smart_chain, terse=True, cache=cache),
+        "demo-failover": Alias(chain=(mock, fast), cache=cache),
     }
 
 

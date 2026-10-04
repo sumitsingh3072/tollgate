@@ -4,6 +4,8 @@
 services:
   redis:
     ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+  redis-cache:
+    ports: ["127.0.0.1:${REDIS_CACHE_PORT:-6381}:6379"]
   postgres:
     ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
   ollama:

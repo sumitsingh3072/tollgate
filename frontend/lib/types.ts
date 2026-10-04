@@ -95,6 +95,12 @@ export type RequestLog = {
   status: number;
   cache_hit: boolean;
   fallback_used: boolean;
+  cache_status: "hit" | "miss" | "admission_rejected" | "ineligible" | "bypass" | null;
+  cache_scope: "private" | "shared" | null;
+  coalesce_role: "none" | "leader" | "follower" | null;
+  queue_wait_ms: number | null;
+  ttft_ms: number | null;
+  tags: Record<string, string> | null;
 };
 
 export type LogPage = { items: RequestLog[]; next_cursor: number | null };

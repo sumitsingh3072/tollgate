@@ -177,10 +177,22 @@ async def logs(
     alias: str | None = None,
     status_code: int | None = Query(default=None, alias="status", ge=100, le=599),
     errors_only: bool = False,
+    cache_status: str | None = Query(default=None, pattern="^(hit|miss|admission_rejected|ineligible|bypass)$"),
+    coalesce_role: str | None = Query(default=None, pattern="^(none|leader|follower)$"),
+    tag: str | None = Query(
+        default=None, pattern=r"^[A-Za-z0-9_.-]{1,64}=[A-Za-z0-9_.-]{1,64}$", description="key=value"
+    ),
     scope: AdminScope = Depends(admin_scope),
 ) -> LogPage:
     filters = queries.LogFilters(
-        owner_id=scope.owner_id, key_id=key_id, alias=alias, status=status_code, errors_only=errors_only
+        owner_id=scope.owner_id,
+        key_id=key_id,
+        alias=alias,
+        status=status_code,
+        errors_only=errors_only,
+        cache_status=cache_status,
+        coalesce_role=coalesce_role,
+        tag=tuple(tag.split("=", 1)) if tag else None,
     )
     async with request.app.state.sessionmaker() as session:
         rows = await queries.list_logs(session, filters, limit=limit + 1, before_id=before)

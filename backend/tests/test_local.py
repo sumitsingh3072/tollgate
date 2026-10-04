@@ -30,6 +30,7 @@ def local_settings() -> Settings:
 async def local_client(local_settings: Settings, redis: FakeAsyncRedis, engine: AsyncEngine, http: httpx.AsyncClient):
     app = create_app(local_settings, use_lifespan=False)
     app.state.redis, app.state.engine, app.state.http = redis, engine, http
+    app.state.redis_cache = redis
     app.state.sessionmaker = create_sessionmaker(engine)
     app.state.log_queue = LogQueue(app.state.sessionmaker, 2)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)

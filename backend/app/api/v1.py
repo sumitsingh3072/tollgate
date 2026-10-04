@@ -9,10 +9,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.config import Alias, Upstream
 from app.core import cache, fallback, limits, proxy, tasks, terse, usage
 from app.core.keys import KeyRecord
+from app.core.tags import TAGS_HEADER, parse_tags
 from app.deps import require_api_key
 from app.errors import DEPENDENCY_ERRORS, GatewayError
 from app.logging_queue import LogQueue, RequestRecord
 from app.schemas import ChatCompletionRequest, ModelCard, ModelList
+from app.telemetry import metrics
 
 router = APIRouter(prefix="/v1", tags=["v1"], dependencies=[Depends(require_api_key)])
 
@@ -51,17 +53,22 @@ async def chat_completions(
     body: ChatCompletionRequest, request: Request, key: KeyRecord = Depends(require_api_key)
 ) -> JSONResponse | StreamingResponse:
     """Every authenticated request produces exactly one log event (streams log when they end)."""
-    log_queue: LogQueue = request.app.state.log_queue
-    record = RequestRecord(key_id=key.id, alias=body.model)
+    record = RequestRecord(key_id=key.id, alias=body.model, tags=parse_tags(request.headers.get(TAGS_HEADER)))
     try:
         response = await _handle(body, request, key, record)
     except Exception as exc:
         record.status = _status_for(exc)
-        log_queue.enqueue(record.finish())
+        _finish(request.app.state.log_queue, record)
         raise
     if not isinstance(response, StreamingResponse):
-        log_queue.enqueue(record.finish())
+        _finish(request.app.state.log_queue, record)
     return response
+
+
+def _finish(log_queue: LogQueue, record: RequestRecord) -> None:
+    event = record.finish()
+    log_queue.enqueue(event)
+    metrics.observe(event)
 
 
 async def _handle(
@@ -76,13 +83,21 @@ async def _handle(
         client_body["messages"] = terse.apply(client_body["messages"])
     prompt = usage.prompt_text(client_body["messages"])
 
+    policy = alias.cache
+    record.cache_scope = policy.scope
     if body.stream:
+        record.cache_status = "bypass"  # streamed responses are not cached yet
         return await _stream(request, key, record, alias, client_body, prompt, limit)
 
-    key_for_cache = cache.cache_key(client_body) if cache.is_cacheable(client_body) else None
-    if key_for_cache and (hit := await cache.get(state.redis, key_for_cache)):
+    key_for_cache = None
+    if cache.request_eligible(client_body, policy):
+        scope = cache.scope_id(policy, str(key.id), body.model)
+        key_for_cache = cache.cache_key(scope, body.model, client_body)
+    else:
+        record.cache_status = "ineligible"
+    if key_for_cache and (hit := await cache.get(state.redis_cache, key_for_cache)):
         # Hits cost no upstream tokens, so they count against neither the quota nor usage stats.
-        record.status, record.model_used, record.cache_hit = 200, hit.model, True
+        record.status, record.model_used, record.cache_hit, record.cache_status = 200, hit.model, True, "hit"
         return JSONResponse(hit.body, headers={**limit.headers(), **_tollgate_headers(hit.model, "hit", False)})
 
     async def complete(upstream: Upstream) -> dict[str, Any]:
@@ -98,14 +113,28 @@ async def _handle(
     )
     await limits.record_tokens(state.redis, key.id, used.total_tokens)
     if key_for_cache:
-        await cache.put(state.redis, key_for_cache, result.upstream.model, result.value, state.settings.cache_ttl)
+        record.cache_status = await _store(state, key_for_cache, result.upstream.model, result.value, policy)
 
     headers = {
         **limit.headers(),
-        **_tollgate_headers(result.upstream.model, "miss" if key_for_cache else "bypass", result.fallback_used),
+        **_tollgate_headers(result.upstream.model, record.cache_status or "bypass", result.fallback_used),
     }
     # Upstream JSON is already OpenAI-shaped; skip FastAPI's re-encoding pass.
     return JSONResponse(result.value, headers=headers)
+
+
+async def _store(
+    state: Any, key_for_cache: str, model: str, body: dict[str, Any], policy: cache.CachePolicy
+) -> cache.CacheStatus:
+    """Cache a fresh response if it is complete, small enough and seen before (second sight)."""
+    settings = state.settings
+    encoded = cache.encode_if_eligible(model, body, settings.cache_max_entry_bytes)
+    if encoded is None:
+        return "ineligible"
+    if not await cache.admit(state.redis_cache, key_for_cache, settings.cache_seen_ttl):
+        return "admission_rejected"
+    await cache.put(state.redis_cache, key_for_cache, encoded, policy.ttl_seconds)
+    return "miss"
 
 
 async def _stream(
@@ -120,12 +149,17 @@ async def _stream(
     state = request.app.state
     tracker = usage.SSEUsageTracker(prompt)
 
+    def on_chunk(chunk: bytes) -> None:
+        tracker.feed(chunk)
+        if tracker.content_seen:
+            record.mark_first_token()
+
     def on_close() -> None:
         record.status, record.usage = 200, tracker.result()
-        state.log_queue.enqueue(record.finish())
+        _finish(state.log_queue, record)
         tasks.spawn(limits.record_tokens(state.redis, key.id, record.usage.total_tokens), name="record-tokens")
 
-    hooks = proxy.StreamHooks(on_chunk=tracker.feed, on_close=on_close)
+    hooks = proxy.StreamHooks(on_chunk=on_chunk, on_close=on_close)
 
     async def open_stream(upstream: Upstream) -> AsyncIterator[bytes]:
         payload = proxy.build_payload(client_body, upstream)

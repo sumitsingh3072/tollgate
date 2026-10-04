@@ -104,7 +104,8 @@ flowchart LR
 |--------|-----------------------|-----------------------------------------|
 | POST   | /v1/chat/completions  | OpenAI-compatible chat, stream/non-stream|
 | GET    | /v1/models            | Aliases available                        |
-| GET    | /health               | Liveness + redis/db + provider usable    |
+| GET    | /health               | Readiness: redis/db + provider usable    |
+| GET    | /health/live          | Liveness (no dependency checks)          |
 | POST   | /admin/keys           | Create key (full key returned once)      |
 | GET    | /admin/keys           | List keys (prefix only)                  |
 | DELETE | /admin/keys/{id}      | Revoke (also deletes Redis cache entry)  |

@@ -34,10 +34,36 @@ services:
     volumes:
       - secrets:/run/tollgate
 
+  # State: API key lookups, rate limits, quotas. Must never evict.
   redis:
     <<: *restart
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Response cache: bounded memory, least-frequently-used eviction with time decay. Kept separate so
+  # cache pressure can never evict rate-limit counters or quotas.
+  redis-cache:
+    <<: *restart
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${CACHE_MAX_MEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lfu
+      - --lfu-log-factor
+      - "10"
+      - --lfu-decay-time
+      - "1"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -107,6 +133,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://tollgate:tollgate@postgres:5432/tollgate}
       REDIS_URL: redis://redis:6379/0
+      REDIS_CACHE_URL: redis://redis-cache:6379/0
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       MOCK_UPSTREAM_URL: http://mock-upstream:9000/v1
       ADMIN_TOKEN_FILE: /run/tollgate/admin_token
@@ -121,6 +148,8 @@ services:
       secrets-init:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      redis-cache:
         condition: service_healthy
       postgres:
         condition: service_healthy
