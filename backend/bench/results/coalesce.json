@@ -1,0 +1,16 @@
+{
+  "config": {
+    "clients": 50,
+    "latency": 0.5
+  },
+  "off": {
+    "upstream_calls": 50,
+    "clients_served": 50,
+    "total_s": 6.61
+  },
+  "on": {
+    "upstream_calls": 1,
+    "clients_served": 50,
+    "total_s": 0.56
+  }
+}

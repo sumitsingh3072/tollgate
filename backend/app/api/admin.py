@@ -1,29 +1,37 @@
 """Control plane: /admin/keys, /admin/stats, /admin/logs. Phases 2 and 4."""
 
+import asyncio
 import logging
 import uuid
 from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from redis.exceptions import ResponseError
 
 from app.config import Settings
 from app.core import keys, limits
 from app.db import analytics, queries
+from app.db.models import RequestLog
 from app.deps import AdminScope, admin_scope, require_admin
 from app.errors import GatewayError
 from app.schemas import (
     ActivityDay,
     AliasOut,
+    CacheStats,
+    CoalesceStats,
+    Fairness,
     GroupUsage,
     KeyCreate,
     KeyCreated,
+    KeyFairness,
     KeyOut,
     KeyUsage,
     LatencyBin,
     LogOut,
     LogPage,
     Me,
+    ModelQueue,
     PeriodTotals,
     SeriesPoint,
     Stats,
@@ -71,7 +79,9 @@ async def create_key(body: KeyCreate, request: Request, scope: AdminScope = Depe
             owner_id=scope.owner_id,
         )
     # Overwrite any negative cache entry so the key works immediately.
-    record = keys.KeyRecord(id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota)
+    record = keys.KeyRecord(
+        id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota, prefix=row.prefix
+    )
     await keys.cache_set(request.app.state.redis, key_hash, record, request.app.state.settings.key_cache_ttl)
     log.info("key created", extra={"key_id": str(row.id), "prefix": row.prefix, "owner": scope.owner_id or "operator"})
     return KeyCreated(**KeyOut.model_validate(row).model_dump(), key=raw)
@@ -129,7 +139,7 @@ async def stats(
 ) -> Stats:
     window = analytics.Window.last(hours, owner_id=scope.owner_id)
     bucket = analytics.bucket_seconds(window)
-    current, previous, series, by_key, by_alias, by_model = await analytics.run_concurrently(
+    current, previous, series, by_key, by_alias, by_model, ttft, roles = await analytics.run_concurrently(
         request.app.state.sessionmaker,
         lambda s: analytics.totals(s, window),
         lambda s: analytics.totals(s, window.previous()),
@@ -137,10 +147,15 @@ async def stats(
         lambda s: analytics.usage_by_key(s, window),
         lambda s: analytics.usage_by_alias(s, window),
         lambda s: analytics.usage_by_model(s, window),
+        lambda s: analytics.ttft_percentiles(s, window),
+        lambda s: analytics.counts_by(s, window, RequestLog.coalesce_role),
     )
     return Stats(
         **_period(current),
         window_hours=hours,
+        p50_ttft_ms=ttft[0],
+        p95_ttft_ms=ttft[1],
+        coalesced=roles.get("follower", 0),
         previous=PeriodTotals(**_period(previous)),
         status_mix=StatusMix(**asdict(current.status_mix)),
         latency_histogram=_histogram(current.latency_histogram),
@@ -149,6 +164,151 @@ async def stats(
         by_key=[KeyUsage(**asdict(row)) for row in by_key],
         by_alias=[GroupUsage(**asdict(row)) for row in by_alias],
         by_model=[GroupUsage(**asdict(row)) for row in by_model],
+    )
+
+
+async def _redis_info(redis: Any, section: str) -> dict[str, Any]:
+    """INFO (not CONFIG, which managed Redis services often disable) carries memory and policy.
+    Degrades to {} where INFO is unavailable."""
+    try:
+        return await redis.info(section)
+    except ResponseError:
+        return {}
+
+
+async def _count_keys(redis: Any, pattern: str, limit: int = 200_000) -> int:
+    count = 0
+    async for _ in redis.scan_iter(match=pattern, count=1000):
+        count += 1
+        if count >= limit:
+            break
+    return count
+
+
+@router.get("/cache/stats")
+async def cache_stats(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> CacheStats:
+    state = request.app.state
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    async with state.sessionmaker() as session:
+        statuses = await analytics.counts_by(session, window, RequestLog.cache_status)
+    hits = statuses.get("hit", 0)
+    eligible = hits + statuses.get("miss", 0) + statuses.get("admission_rejected", 0)
+    base = {
+        "window_hours": hours,
+        "requests": sum(statuses.values()),
+        "statuses": {k or "unknown": v for k, v in statuses.items()},
+        "hit_rate": _rate(hits, eligible),
+        "admission_rejected": statuses.get("admission_rejected", 0),
+    }
+    if not scope.is_operator:  # instance-wide memory and entry counts would leak other tenants' usage
+        return CacheStats(
+            **base,
+            entries=None,
+            seen_markers=None,
+            used_memory_bytes=None,
+            max_memory_bytes=None,
+            eviction_policy=None,
+            evicted_keys=None,
+            hits_per_mb=None,
+            separate_instance=None,
+        )
+    redis_cache = state.redis_cache
+    memory, stats = await asyncio.gather(_redis_info(redis_cache, "memory"), _redis_info(redis_cache, "stats"))
+    entries, seen = await asyncio.gather(_count_keys(redis_cache, "cache:*"), _count_keys(redis_cache, "seen:*"))
+    used = int(memory.get("used_memory", 0))
+    return CacheStats(
+        **base,
+        entries=entries,
+        seen_markers=seen,
+        used_memory_bytes=used,
+        max_memory_bytes=int(memory.get("maxmemory", 0)),
+        eviction_policy=str(memory.get("maxmemory_policy", "unknown")),
+        evicted_keys=int(stats.get("evicted_keys", 0)),
+        hits_per_mb=round(hits / (used / 1_048_576), 2) if used else None,
+        separate_instance=redis_cache is not state.redis,
+    )
+
+
+@router.get("/coalesce/stats")
+async def coalesce_stats(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> CoalesceStats:
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    async with request.app.state.sessionmaker() as session:
+        roles = await analytics.counts_by(session, window, RequestLog.coalesce_role)
+    leaders, followers = roles.get("leader", 0), roles.get("follower", 0)
+    coalescer = request.app.state.coalescer
+    return CoalesceStats(
+        window_hours=hours,
+        leaders=leaders,
+        followers=followers,
+        calls_saved=followers,
+        share_rate=_rate(followers, leaders + followers),
+        in_flight=coalescer.in_flight,
+        largest_fanout_since_start=coalescer.stats.largest_fanout,
+        flights_since_start=coalescer.stats.flights,
+    )
+
+
+@router.get("/fairness")
+async def fairness(
+    request: Request,
+    hours: int = Query(default=1, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> Fairness:
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    usage, waits, owned = await analytics.run_concurrently(
+        request.app.state.sessionmaker,
+        lambda s: analytics.usage_by_key(s, window),
+        lambda s: analytics.queue_wait_by_key(s, window),
+        lambda s: queries.list_keys(s, scope.owner_id),
+    )
+    queue = request.app.state.fair_queue
+    visible = {str(k.id) for k in owned}
+    queued: dict[str, int] = {}
+    for scheduler in queue.schedulers.values():
+        for key_id, depth in scheduler.depth_by_key().items():
+            queued[key_id] = queued.get(key_id, 0) + depth
+    counters = queue.counters.snapshot()
+    wait_by_key = {w.key_id: w for w in waits}
+    total = sum(u.tokens for u in usage) or 1
+    keys_out = [
+        KeyFairness(
+            key_id=u.key_id,
+            name=u.name,
+            prefix=u.prefix,
+            requests=u.requests,
+            tokens=u.tokens,
+            share=round(u.tokens / total, 4),
+            queue_wait_p95_ms=wait_by_key[u.key_id].p95_ms if u.key_id in wait_by_key else None,
+            queue_wait_avg_ms=wait_by_key[u.key_id].avg_ms if u.key_id in wait_by_key else None,
+            queued_now=queued.get(str(u.key_id), 0),
+            virtual_tokens=round(counters.get(str(u.key_id), 0.0), 1),
+        )
+        for u in usage
+    ]
+    models = [
+        ModelQueue(
+            model=s.model,
+            parallel=s.parallel,
+            running=s.running,
+            # A user only sees their own waiting requests; the operator sees all.
+            queued=sum(d for k, d in s.depth_by_key().items() if scope.is_operator or k in visible),
+        )
+        for s in queue.schedulers.values()
+    ]
+    return Fairness(
+        window_hours=hours,
+        mode=queue.mode,
+        jain_index=analytics.jain_index([float(u.tokens) for u in usage]),
+        keys=keys_out,
+        models=models,
     )
 
 
@@ -177,10 +337,22 @@ async def logs(
     alias: str | None = None,
     status_code: int | None = Query(default=None, alias="status", ge=100, le=599),
     errors_only: bool = False,
+    cache_status: str | None = Query(default=None, pattern="^(hit|miss|admission_rejected|ineligible|bypass)$"),
+    coalesce_role: str | None = Query(default=None, pattern="^(none|leader|follower)$"),
+    tag: str | None = Query(
+        default=None, pattern=r"^[A-Za-z0-9_.-]{1,64}=[A-Za-z0-9_.-]{1,64}$", description="key=value"
+    ),
     scope: AdminScope = Depends(admin_scope),
 ) -> LogPage:
     filters = queries.LogFilters(
-        owner_id=scope.owner_id, key_id=key_id, alias=alias, status=status_code, errors_only=errors_only
+        owner_id=scope.owner_id,
+        key_id=key_id,
+        alias=alias,
+        status=status_code,
+        errors_only=errors_only,
+        cache_status=cache_status,
+        coalesce_role=coalesce_role,
+        tag=tuple(tag.split("=", 1)) if tag else None,
     )
     async with request.app.state.sessionmaker() as session:
         rows = await queries.list_logs(session, filters, limit=limit + 1, before_id=before)

@@ -3,8 +3,7 @@
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
@@ -113,20 +112,11 @@ async def complete(http: httpx.AsyncClient, alias: str, upstream: Upstream, payl
         raise GatewayError(502, "upstream_error", f"upstream {upstream.model}: invalid JSON response") from exc
 
 
-@dataclass(frozen=True)
-class StreamHooks:
-    """Synchronous callbacks so they also run when the client disconnects (no awaits needed)."""
-
-    on_chunk: Callable[[bytes], None] | None = None
-    on_close: Callable[[], None] | None = None
-
-
 async def open_stream(
     http: httpx.AsyncClient,
     alias: str,
     upstream: Upstream,
     payload: dict[str, Any],
-    hooks: StreamHooks | None = None,
 ) -> AsyncIterator[bytes]:
     """Start a streaming call and return a byte iterator over the SSE body.
 
@@ -147,27 +137,21 @@ async def open_stream(
         raise upstream_error(response, upstream)
 
     _log_call(alias, upstream, response.status_code, start, stream=True, phase="headers")
-    return _relay(response, alias, upstream, start, hooks or StreamHooks())
+    return _relay(response, alias, upstream, start)
 
 
-async def _relay(
-    response: httpx.Response, alias: str, upstream: Upstream, start: float, hooks: StreamHooks
-) -> AsyncIterator[bytes]:
-    """Yield upstream SSE bytes; always release the connection (also on client disconnect).
+async def _relay(response: httpx.Response, alias: str, upstream: Upstream, start: float) -> AsyncIterator[bytes]:
+    """Yield upstream SSE bytes; always release the connection (also when cancelled).
 
     aiter_bytes (not aiter_raw) so any upstream gzip is decoded; we don't forward content-encoding.
     """
     try:
         async for chunk in response.aiter_bytes():
-            if hooks.on_chunk:
-                hooks.on_chunk(chunk)
             yield chunk
     except httpx.TransportError as exc:
-        # Headers are already sent; the best we can do is end the stream and log it.
+        # Headers are already sent: surface it so the gateway can tell the client and count the failure.
         log.warning("upstream stream broke", extra={"model": upstream.model, "error": repr(exc)})
+        raise GatewayError(502, "upstream_error", f"upstream {upstream.model}: stream interrupted") from exc
     finally:
-        # on_close first: it is sync, so it runs even if the awaits below are cancelled.
-        if hooks.on_close:
-            hooks.on_close()
         _log_call(alias, upstream, response.status_code, start, stream=True)
         await response.aclose()

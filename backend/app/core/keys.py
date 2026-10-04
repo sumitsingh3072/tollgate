@@ -24,6 +24,7 @@ class KeyRecord:
     name: str
     rpm: int
     daily_token_quota: int
+    prefix: str = ""  # display prefix, used as a low-cardinality metrics label
 
 
 def generate_key() -> str:
@@ -52,7 +53,11 @@ async def cache_get(redis: Redis, key_hash: str) -> KeyRecord | bool | None:
         return False
     data = json.loads(raw)
     return KeyRecord(
-        id=uuid.UUID(data["id"]), name=data["name"], rpm=data["rpm"], daily_token_quota=data["daily_token_quota"]
+        id=uuid.UUID(data["id"]),
+        name=data["name"],
+        rpm=data["rpm"],
+        daily_token_quota=data["daily_token_quota"],
+        prefix=data.get("prefix", ""),  # entries cached before the field existed
     )
 
 

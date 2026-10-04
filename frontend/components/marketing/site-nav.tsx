@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { CLERK_ENABLED } from "@/lib/auth-config";
 
 const LINKS = [
+  { href: "#unique", label: "Why Tollgate" },
   { href: "#features", label: "Features" },
   { href: "#how-it-works", label: "How it works" },
   { href: "#quickstart", label: "Quickstart" },

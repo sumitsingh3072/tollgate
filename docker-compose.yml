@@ -34,10 +34,39 @@ services:
     volumes:
       - secrets:/run/tollgate
 
+  # State: API key lookups, rate limits, quotas. Must never evict.
   redis:
     <<: *restart
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # AOF on a volume: daily token usage and rate-limit counters survive restarts.
+    command: ["redis-server", "--save", "", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Response cache: bounded memory, least-frequently-used eviction with time decay. Kept separate so
+  # cache pressure can never evict rate-limit counters or quotas.
+  redis-cache:
+    <<: *restart
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${CACHE_MAX_MEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lfu
+      - --lfu-log-factor
+      - "10"
+      - --lfu-decay-time
+      - "1"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -64,6 +93,9 @@ services:
     <<: *restart
     profiles: ["ollama"]
     image: ollama/ollama:latest
+    environment:
+      # Same slot count as the gateway's fair queue, so Ollama's own FIFO queue stays empty.
+      OLLAMA_NUM_PARALLEL: ${UPSTREAM_MAX_PARALLEL:-4}
     volumes:
       - ollama:/root/.ollama
     healthcheck:
@@ -107,20 +139,23 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://tollgate:tollgate@postgres:5432/tollgate}
       REDIS_URL: redis://redis:6379/0
+      REDIS_CACHE_URL: redis://redis-cache:6379/0
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       MOCK_UPSTREAM_URL: http://mock-upstream:9000/v1
       ADMIN_TOKEN_FILE: /run/tollgate/admin_token
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     volumes:
       - secrets:/run/tollgate:ro
     ports:
-      # Local by default. For remote access set BIND_ADDRESS=0.0.0.0 (and put TLS in front).
-      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+      # Local by default. GATEWAY_BIND_ADDRESS=0.0.0.0 lets other machines call the API (add TLS).
+      - "${GATEWAY_BIND_ADDRESS:-${BIND_ADDRESS:-127.0.0.1}}:${BACKEND_PORT:-8000}:8000"
     depends_on:
       secrets-init:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      redis-cache:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -143,16 +178,18 @@ services:
       ADMIN_TOKEN_FILE: /run/tollgate/admin_token
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      DASHBOARD_TRUSTED_HOSTS: ${DASHBOARD_TRUSTED_HOSTS:-}
     volumes:
       - secrets:/run/tollgate:ro
     ports:
-      # Without Clerk the dashboard has no sign-in: keep it on localhost unless accounts are enabled.
-      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+      # Without Clerk the dashboard has no sign-in and refuses non-localhost hosts anyway.
+      - "${DASHBOARD_BIND_ADDRESS:-${BIND_ADDRESS:-127.0.0.1}}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
 
 volumes:
   pgdata:
+  redisdata:
   ollama:
   secrets:

@@ -65,6 +65,12 @@ class SSEUsageTracker:
         self._buffer = b""
         self._usage: Usage | None = None
         self._content: list[str] = []
+        self._chars = 0
+        # Enough of the stream to rebuild it as one completion (for the response cache).
+        self.raw_usage: dict[str, Any] | None = None
+        self.finish_reason: str | None = None
+        self.tool_calls = False
+        self.meta: dict[str, Any] = {}
 
     def feed(self, chunk: bytes) -> None:
         self._buffer += chunk
@@ -84,11 +90,34 @@ class SSEUsageTracker:
             return
         if not isinstance(event, dict):
             return
-        self._usage = from_usage_dict(event.get("usage")) or self._usage
+        if (usage := from_usage_dict(event.get("usage"))) is not None:
+            self._usage, self.raw_usage = usage, event["usage"]
+        if not self.meta:
+            self.meta = {k: event[k] for k in ("id", "created", "model") if k in event}
         for choice in event.get("choices") or []:
-            content = (choice.get("delta") or {}).get("content") if isinstance(choice, dict) else None
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            content = delta.get("content")
             if isinstance(content, str):
                 self._content.append(content)
+                self._chars += len(content)
+            if delta.get("tool_calls") or delta.get("function_call"):
+                self.tool_calls = True
+            if choice.get("finish_reason"):
+                self.finish_reason = choice["finish_reason"]
+
+    @property
+    def content_seen(self) -> bool:
+        return bool(self._content)
+
+    @property
+    def content_chars(self) -> int:
+        return self._chars
+
+    @property
+    def content(self) -> str:
+        return "".join(self._content)
 
     def result(self) -> Usage:
         if self._buffer:

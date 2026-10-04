@@ -44,11 +44,35 @@ function StatusBadge({ status }: { status: number }) {
   return <Badge className={cn("font-mono tabular-nums", tone)}>{status}</Badge>;
 }
 
+const CACHE_LABEL: Record<NonNullable<RequestLog["cache_status"]>, string> = {
+  hit: "cache hit",
+  miss: "cached",
+  admission_rejected: "seen once",
+  ineligible: "",
+  bypass: "",
+};
+
 function Flags({ log }: { log: RequestLog }) {
+  const cacheLabel = log.cache_status ? CACHE_LABEL[log.cache_status] : log.cache_hit ? "cache hit" : "";
   return (
-    <div className="flex gap-1">
-      {log.cache_hit && <Badge variant="secondary">cache</Badge>}
+    <div className="flex flex-wrap gap-1">
+      {cacheLabel && (
+        <Badge variant={log.cache_status === "hit" || log.cache_hit ? "secondary" : "outline"} title="Response cache">
+          {cacheLabel}
+        </Badge>
+      )}
+      {log.coalesce_role === "follower" && (
+        <Badge variant="outline" title="Shared another request's model call">
+          coalesced
+        </Badge>
+      )}
       {log.fallback_used && <Badge className="bg-chart-3/15 text-chart-3">fallback</Badge>}
+      {log.tags &&
+        Object.entries(log.tags).map(([k, v]) => (
+          <Badge key={k} variant="outline" className="font-mono text-[11px] text-muted-foreground">
+            {k}={v}
+          </Badge>
+        ))}
     </div>
   );
 }
@@ -85,6 +109,10 @@ export async function LogsTable({ filters, before }: { filters: LogFilterValues;
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Tokens in / out</TableHead>
               <TableHead className="text-right">Latency</TableHead>
+              <TableHead className="text-right">TTFT</TableHead>
+              <TableHead className="text-right" title="Time waiting for a model slot">
+                Queue
+              </TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -105,6 +133,12 @@ export async function LogsTable({ filters, before }: { filters: LogFilterValues;
                   {formatNumber(log.out_tokens)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{formatLatency(log.latency_ms)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {log.ttft_ms === null ? "—" : formatLatency(log.ttft_ms)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {log.queue_wait_ms ? formatLatency(log.queue_wait_ms) : "—"}
+                </TableCell>
                 <TableCell>
                   <Flags log={log} />
                 </TableCell>

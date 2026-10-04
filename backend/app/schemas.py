@@ -131,6 +131,9 @@ class SeriesPoint(BaseModel):
 
 class Stats(PeriodTotals):
     window_hours: int
+    p50_ttft_ms: float | None = Field(description="Time to first token (streams)")
+    p95_ttft_ms: float | None
+    coalesced: int = Field(description="Requests served by another request's upstream call (calls saved)")
     previous: PeriodTotals = Field(description="Same-length window immediately before this one")
     status_mix: StatusMix
     latency_histogram: list[LatencyBin] = Field(description="Upstream-served requests only")
@@ -164,6 +167,12 @@ class LogOut(BaseModel):
     status: int
     cache_hit: bool
     fallback_used: bool
+    cache_status: str | None = None
+    cache_scope: str | None = None
+    coalesce_role: str | None = None
+    queue_wait_ms: int | None = None
+    ttft_ms: int | None = None
+    tags: dict[str, str] | None = None
 
 
 class LogPage(BaseModel):
@@ -187,3 +196,59 @@ class Me(BaseModel):
     owner_id: str | None = Field(description="None for the operator (ADMIN_TOKEN only)")
     active_keys: int
     limits: UserLimits | None = Field(description="Self-serve caps; None for the operator")
+
+
+class CoalesceStats(BaseModel):
+    window_hours: int
+    leaders: int = Field(description="Requests that made the upstream call for a group")
+    followers: int = Field(description="Requests served from another request's upstream call")
+    calls_saved: int
+    share_rate: float = Field(description="followers / (leaders + followers)")
+    in_flight: int = Field(description="Coalescable upstream calls running now")
+    largest_fanout_since_start: int
+    flights_since_start: int
+
+
+class KeyFairness(BaseModel):
+    key_id: uuid.UUID | None
+    name: str | None
+    prefix: str | None
+    requests: int
+    tokens: int
+    share: float = Field(description="Fraction of all tokens served in the window")
+    queue_wait_p95_ms: float | None
+    queue_wait_avg_ms: float | None
+    queued_now: int
+    virtual_tokens: float = Field(description="VTC counter (input + output_weight x output) since start")
+
+
+class ModelQueue(BaseModel):
+    model: str
+    parallel: int
+    running: int
+    queued: int
+
+
+class Fairness(BaseModel):
+    window_hours: int
+    mode: str
+    jain_index: float | None = Field(description="Over tokens served per key; 1.0 = perfectly even")
+    keys: list[KeyFairness]
+    models: list[ModelQueue]
+
+
+class CacheStats(BaseModel):
+    window_hours: int
+    requests: int
+    statuses: dict[str, int] = Field(description="Requests per cache_status in the window")
+    hit_rate: float = Field(description="hits / cache-eligible requests (hit + miss + admission_rejected)")
+    admission_rejected: int
+    # Instance-wide Redis figures: operator view only (None for signed-in users).
+    entries: int | None = Field(description="Cached responses currently stored")
+    seen_markers: int | None = Field(description="First-sighting markers (admission ghosts)")
+    used_memory_bytes: int | None
+    max_memory_bytes: int | None = Field(description="0 = no limit (cache shares the state Redis)")
+    eviction_policy: str | None
+    evicted_keys: int | None = Field(description="Since the cache Redis started")
+    hits_per_mb: float | None
+    separate_instance: bool | None

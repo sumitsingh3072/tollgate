@@ -16,6 +16,7 @@ let cachedToken: string | undefined;
 function adminToken(): string {
   if (cachedToken) return cachedToken;
   let token = process.env.ADMIN_TOKEN?.trim() ?? "";
+  if (token === "change-me") token = ""; // the placeholder means "not set", as in the gateway
   if (!token && process.env.ADMIN_TOKEN_FILE) {
     try {
       token = readFileSync(process.env.ADMIN_TOKEN_FILE, "utf8").trim();

@@ -23,3 +23,9 @@ async def test_health_flags_missing_gemini_key(redis, engine, http) -> None:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         body = (await client.get("/health")).json()
     assert (body["status"], body["upstream"], body["provider"]) == ("degraded", False, "gemini")
+
+
+async def test_liveness_has_no_dependencies(make_client) -> None:
+    async with make_client(redis_up=False, db_up=False) as client:
+        resp = await client.get("/health/live")
+    assert resp.status_code == 200 and resp.json() == {"status": "ok"}

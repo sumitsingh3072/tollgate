@@ -15,7 +15,7 @@ from app.logging_setup import request_id_var
 access_log = logging.getLogger("tollgate.access")
 
 REQUEST_ID_HEADER = b"x-request-id"
-_SKIP_ACCESS_LOG = frozenset({"/health"})
+_SKIP_ACCESS_LOG = frozenset({"/health", "/health/live"})
 # Accept a caller-supplied id only if it is short and log-safe.
 _VALID_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 

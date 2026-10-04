@@ -33,6 +33,12 @@ class LogEvent:
     status: int
     cache_hit: bool
     fallback_used: bool
+    cache_status: str | None = None
+    cache_scope: str | None = None
+    coalesce_role: str | None = None
+    queue_wait_ms: int | None = None
+    ttft_ms: int | None = None
+    tags: dict[str, str] | None = None
 
 
 @dataclass(slots=True)
@@ -46,8 +52,18 @@ class RequestRecord:
     usage: Usage | None = None
     cache_hit: bool = False
     fallback_used: bool = False
+    cache_status: str | None = None
+    cache_scope: str | None = None
+    coalesce_role: str | None = None
+    queue_wait_ms: int | None = None
+    tags: dict[str, str] | None = None
+    first_token_at: float | None = None  # perf_counter time of the first streamed content
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     started: float = field(default_factory=time.perf_counter)
+
+    def mark_first_token(self) -> None:
+        if self.first_token_at is None:
+            self.first_token_at = time.perf_counter()
 
     def finish(self) -> LogEvent:
         prompt = self.usage.prompt_tokens if self.usage else 0
@@ -64,6 +80,12 @@ class RequestRecord:
             status=self.status,
             cache_hit=self.cache_hit,
             fallback_used=self.fallback_used,
+            cache_status=self.cache_status,
+            cache_scope=self.cache_scope,
+            coalesce_role=self.coalesce_role,
+            queue_wait_ms=self.queue_wait_ms,
+            ttft_ms=round((self.first_token_at - self.started) * 1000) if self.first_token_at else None,
+            tags=self.tags,
         )
 
 

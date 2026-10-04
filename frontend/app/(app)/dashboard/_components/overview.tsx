@@ -1,7 +1,7 @@
 import { BarChart3Icon } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
 
+import { Panel } from "@/components/panel";
 import { type Delta, StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -10,37 +10,12 @@ import { UsageChart } from "@/components/usage-chart";
 import { change, formatCompact, formatLatency, formatNumber, formatPercent, formatWindow } from "@/lib/format";
 import { admin } from "@/lib/server/gateway";
 import type { ActivityDay, SeriesPoint, Stats } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 import { ActivityHeatmap } from "./activity-heatmap";
 import { BreakdownTable } from "./breakdown-table";
 import { LatencyHistogram } from "./latency-histogram";
 import { StatusMix } from "./status-mix";
 import { TrafficChart } from "./traffic-chart";
-
-function Panel({
-  title,
-  description,
-  children,
-  className,
-  flush,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-  className?: string;
-  flush?: boolean;
-}) {
-  return (
-    <section className={cn("rounded-lg border bg-card", className)}>
-      <header className="border-b px-4 py-3">
-        <h2 className="font-medium">{title}</h2>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </header>
-      <div className={flush ? "" : "p-4"}>{children}</div>
-    </section>
-  );
-}
 
 const ratio = (part: number, whole: number) => (whole ? part / whole : 0);
 
@@ -102,7 +77,7 @@ export async function OverviewContent({ hours }: { hours: number }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
           label="Requests"
           value={formatCompact(stats.requests)}
@@ -138,6 +113,16 @@ export async function OverviewContent({ hours }: { hours: number }) {
           hint={`p95 ${formatLatency(stats.p95_latency_ms)}`}
           delta={delta(stats.p50_latency_ms, prev.p50_latency_ms, "down")}
           trend={t.latency}
+        />
+        <StatCard
+          label="Time to first token"
+          value={formatLatency(stats.p50_ttft_ms)}
+          hint={stats.p95_ttft_ms === null ? "streams only" : `p95 ${formatLatency(stats.p95_ttft_ms)} · streams`}
+        />
+        <StatCard
+          label="Model calls saved"
+          value={formatNumber(stats.coalesced + stats.cache_hits)}
+          hint={`${formatNumber(stats.cache_hits)} cache · ${formatNumber(stats.coalesced)} coalesced`}
         />
         <StatCard
           label="Fallbacks"
@@ -184,8 +169,8 @@ export async function OverviewContent({ hours }: { hours: number }) {
 export function OverviewSkeleton() {
   return (
     <div className="space-y-4" aria-busy="true" aria-label="Loading overview">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        {Array.from({ length: 6 }, (_, i) => (
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Array.from({ length: 8 }, (_, i) => (
           <Skeleton key={i} className="h-[118px] rounded-lg" />
         ))}
       </div>

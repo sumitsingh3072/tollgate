@@ -121,20 +121,30 @@ def percentile(sorted_values: list[int], q: float) -> float | None:
     return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (pos - lower)
 
 
-async def _latency_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+async def _percentiles(session: AsyncSession, column: Any, where: Any) -> tuple[float | None, float | None]:
+    """p50 and p95 of a column (Postgres percentile_cont; computed in Python elsewhere)."""
     if _is_postgres(session):
-        latency = RequestLog.latency_ms.asc()
+        ordered = column.asc()
         row = (
             await session.execute(
                 select(
-                    func.percentile_cont(0.5).within_group(latency),
-                    func.percentile_cont(0.95).within_group(latency),
-                ).where(window.where())
+                    func.percentile_cont(0.5).within_group(ordered),
+                    func.percentile_cont(0.95).within_group(ordered),
+                ).where(where)
             )
         ).one()
         return row[0], row[1]
-    values = sorted((await session.scalars(select(RequestLog.latency_ms).where(window.where()))).all())
+    values = sorted((await session.scalars(select(column).where(where))).all())
     return percentile(values, 0.5), percentile(values, 0.95)
+
+
+async def _latency_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+    return await _percentiles(session, RequestLog.latency_ms, window.where())
+
+
+async def ttft_percentiles(session: AsyncSession, window: Window) -> tuple[float | None, float | None]:
+    """Time to first token, over streams that produced content."""
+    return await _percentiles(session, RequestLog.ttft_ms, window.where() & RequestLog.ttft_ms.is_not(None))
 
 
 def _histogram_columns() -> list[Any]:
@@ -177,6 +187,48 @@ async def totals(session: AsyncSession, window: Window) -> Totals:
         status_mix=StatusMix(*values[6:10]),
         latency_histogram=values[10:],
     )
+
+
+async def counts_by(session: AsyncSession, window: Window, column: Any) -> dict[str | None, int]:
+    """Request counts grouped by a categorical column (cache_status, coalesce_role, ...)."""
+    result = await session.execute(select(column, func.count()).where(window.where()).group_by(column))
+    return {value: int(n) for value, n in result.all()}
+
+
+@dataclass(frozen=True)
+class QueueWaitRow:
+    key_id: uuid.UUID | None
+    p95_ms: float | None
+    avg_ms: float | None
+
+
+async def queue_wait_by_key(session: AsyncSession, window: Window) -> list[QueueWaitRow]:
+    """Queue wait per key, over requests that actually took a model slot."""
+    waited = window.where() & RequestLog.queue_wait_ms.is_not(None)
+    if _is_postgres(session):
+        result = await session.execute(
+            select(
+                RequestLog.key_id,
+                func.percentile_cont(0.95).within_group(RequestLog.queue_wait_ms.asc()),
+                func.avg(RequestLog.queue_wait_ms),
+            )
+            .where(waited)
+            .group_by(RequestLog.key_id)
+        )
+        return [QueueWaitRow(k, p95, float(avg) if avg is not None else None) for k, p95, avg in result.all()]
+    rows = (await session.execute(select(RequestLog.key_id, RequestLog.queue_wait_ms).where(waited))).all()
+    by_key: dict[uuid.UUID | None, list[int]] = {}
+    for key_id, wait in rows:
+        by_key.setdefault(key_id, []).append(wait)
+    return [QueueWaitRow(k, percentile(sorted(v), 0.95), sum(v) / len(v)) for k, v in by_key.items()]
+
+
+def jain_index(values: list[float]) -> float | None:
+    """Jain's fairness index: 1.0 = perfectly even, 1/n = one party got everything."""
+    values = [v for v in values if v > 0]
+    if not values:
+        return None
+    return (sum(values) ** 2) / (len(values) * sum(v * v for v in values))
 
 
 async def usage_by_key(session: AsyncSession, window: Window) -> list[KeyUsageRow]:

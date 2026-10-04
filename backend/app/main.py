@@ -7,19 +7,23 @@ from contextlib import asynccontextmanager
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api import admin, v1
 from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings, upstream_models
 from app.core import tasks
+from app.core.coalesce import Coalescer
+from app.core.fair_queue import FairQueue
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
+from app.deps import require_admin
 from app.errors import install_error_handlers
 from app.logging_queue import LogQueue
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
+from app.telemetry import metrics
 
 log = logging.getLogger("tollgate")
 
@@ -30,6 +34,8 @@ TOLLGATE_HEADERS = [
     "x-tollgate-cache",
     "x-tollgate-fallback",
     "x-request-id",
+    "x-tollgate-coalesce",
+    "x-tollgate-queue-wait-ms",
     "x-ratelimit-limit-requests",
     "x-ratelimit-remaining-requests",
     "x-ratelimit-limit-tokens",
@@ -38,9 +44,16 @@ TOLLGATE_HEADERS = [
 ]
 
 
+def _check_admin_token(settings: Settings) -> None:
+    if settings.admin_token.get_secret_value() != DEFAULT_ADMIN_TOKEN:
+        return
+    if settings.environment == "production":
+        raise RuntimeError("ADMIN_TOKEN is the public default; set ADMIN_TOKEN or ADMIN_TOKEN_FILE")
+    log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
+
+
 def _warn_on_insecure_config(settings: Settings) -> None:
-    if settings.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN:
-        log.warning("ADMIN_TOKEN is the default value; set a strong token before exposing the gateway")
+    _check_admin_token(settings)
     if settings.upstream_provider == "gemini" and not settings.gemini_api_key.get_secret_value():
         log.warning("GEMINI_API_KEY is not set; upstream calls will fail with 401")
 
@@ -55,6 +68,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    app.state.redis_cache = (
+        aioredis.from_url(settings.redis_cache_url, decode_responses=True)
+        if settings.redis_cache_url
+        else app.state.redis
+    )
     app.state.engine = create_engine(settings.database_url)
     app.state.sessionmaker = create_sessionmaker(app.state.engine)
     try:
@@ -77,9 +95,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await app.state.coalescer.shutdown()
         await tasks.drain()
         await app.state.log_queue.stop()  # final flush before the engine closes
         await app.state.http.aclose()
+        if app.state.redis_cache is not app.state.redis:
+            await app.state.redis_cache.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()
         log.info("gateway stopped")
@@ -99,6 +120,14 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
     app.state.settings = settings
     app.state.aliases = build_aliases(settings)
     app.state.breakers = CircuitBreakers(settings.breaker_failure_threshold, settings.breaker_open_seconds)
+    app.state.coalescer = Coalescer()
+    app.state.fair_queue = FairQueue(
+        mode=settings.fair_queue_mode,
+        parallel=settings.upstream_max_parallel,
+        max_queue=settings.fair_max_queue_per_key,
+        max_wait_s=settings.fair_max_wait_s,
+        output_weight=settings.fair_output_weight,
+    )
 
     # Order matters: the last-added middleware is outermost, so request ids wrap CORS too.
     app.add_middleware(
@@ -113,6 +142,18 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
 
     app.include_router(v1.router)
     app.include_router(admin.router)
+
+    @app.get("/metrics", tags=["ops"], dependencies=[Depends(require_admin)], include_in_schema=False)
+    async def prometheus_metrics() -> Response:
+        """Prometheus exposition format. Scrape with `authorization: {credentials: <ADMIN_TOKEN>}`."""
+        content, media_type = metrics.render()
+        return Response(content, media_type=media_type)
+
+    @app.get("/health/live", tags=["ops"])
+    async def live() -> dict[str, str]:
+        """Liveness for container orchestrators: the process is up. No dependency checks, so a slow
+        database or a missing API key never gets a healthy gateway restarted."""
+        return {"status": "ok"}
 
     @app.get("/health", tags=["ops"])
     async def health(request: Request) -> dict[str, object]:

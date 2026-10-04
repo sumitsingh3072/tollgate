@@ -140,7 +140,54 @@ logs and stats; signed-out visitors see the landing page and get redirected from
 Done when: a clean copy with only GEMINI_API_KEY in .env comes up with
 `docker compose up -d`, the dashboard opens without sign-in, and a chat is answered.
 
-## Phase 8: Hardening and ship
+## Phase 8: Advanced features, quick wins (cache core + visibility core)
+Spec: "Every token pays the toll": avoid repeated work, share capacity fairly, prove it.
+- [x] Separate response-cache Redis (allkeys-lfu, maxmemory, lfu-decay) from the state Redis
+      (noeviction), so cache pressure can never evict limits or quotas
+- [x] Eligibility: temperature 0 (or route opt-in), no tools/n>1; store only finish_reason
+      "stop", no tool calls, <= CACHE_MAX_ENTRY_BYTES
+- [x] Canonical key sha256(scope | alias | canonical request) with normalized message text;
+      private scope (API key id) by default
+- [x] Admission on second sight (simplified TinyLFU): "seen:" marker first, store on repeat
+- [x] Per-route TTL (default 24h); x-tollgate-cache = hit | miss | admission_rejected |
+      ineligible | bypass
+- [x] request_logs: cache_status, cache_scope, coalesce_role, queue_wait_ms, ttft_ms, tags
+      (idempotent migrations); x-tollgate-tags header; log filters by cache_status / tag
+- [x] /metrics (Prometheus, admin token): GenAI token usage, duration, TTFT; cache counters
+- [x] /health/live liveness endpoint (container healthcheck) separate from /health readiness
+
+## Phase 9: Request coalescing
+- [x] Flight registry keyed by the cache key (+ json/sse); leader runs upstream as its own task,
+      followers replay buffered chunks then wait; late joiners get the full response
+- [x] Cancellation safety (cancel upstream only when subscribers == 0), shared errors; every
+      upstream call runs in a Flight (private ones for non-coalescable requests)
+- [x] Billing per receiving key; coalesce_role logged; x-tollgate-coalesce header; admit to cache
+      immediately when >= 2 followers; COALESCING_ENABLED toggle (benchmarks)
+- [x] Metrics tollgate_coalesced_requests_total{role}; /admin/coalesce/stats
+
+## Phase 10: Fair queuing (VTC)
+- [x] Gateway-owned concurrency per upstream model (UPSTREAM_MAX_PARALLEL; Ollama's
+      OLLAMA_NUM_PARALLEL follows it) so the provider's own queue stays empty
+- [x] Virtual Token Counter per key (input + 2 x output, charged at dispatch and while streaming),
+      lowest counter dispatches first, counter lift for newly active keys; only coalescing
+      leaders take slots. (Per-key weights: supported by the scheduler, not exposed yet.)
+- [x] Backpressure: FAIR_MAX_QUEUE_PER_KEY (queue_full), FAIR_MAX_WAIT_S (queue_timeout) -> 429
+      + Retry-After; x-tollgate-queue-wait-ms; tollgate_queue_depth / tollgate_queue_wait_seconds;
+      /admin/fairness (tokens, share, wait p95, live depth, VTC counters, Jain's index)
+- [x] FAIR_QUEUE_MODE=fair|fifo|off for benchmarking
+
+## Phase 11: Shared cache, stream caching, dashboard pages, benchmarks
+- [x] Shared scope (opt-in, "faq" alias) with per-key insert budgets; cache/coalesce headers hidden
+- [x] Cache streamed responses (rebuilt into one completion) and replay hits as SSE or JSON
+- [x] /admin/cache/stats (hit rate, memory vs limit, evictions, rejections, entries, hits per MB)
+- [x] Dashboard: Cache and Fairness (live) pages; Overview TTFT and "model calls saved" tiles;
+      Logs show coalescing and queue wait
+- [x] bench/: in-process harness with a simulated model, Zipf + one-off workload, cache_bench,
+      coalesce_bench, fair_bench; measured results in docs/benchmarks.md
+- [x] Fix found by the benchmarks: gateway queue rejections no longer count as upstream failures
+      (circuit breaker), and the fallback deadline covers the upstream call, not queue waiting
+
+## Phase 12: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
 - [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table

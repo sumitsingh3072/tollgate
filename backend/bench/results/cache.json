@@ -1,0 +1,32 @@
+{
+  "config": {
+    "redis_url": "redis://localhost:6390/0",
+    "cache_url": "redis://localhost:6391/0",
+    "requests": 5000,
+    "maxmemory": "2mb",
+    "zipf": 1.1,
+    "one_off": 0.4
+  },
+  "naive": {
+    "hit_rate": 0.29,
+    "hits": 1450,
+    "model_calls": 3550,
+    "entries": 607,
+    "memory_mb": 2.0,
+    "evictions": 2943,
+    "hits_per_mb": 725.3
+  },
+  "smart": {
+    "hit_rate": 0.292,
+    "hits": 1460,
+    "model_calls": 3540,
+    "entries": 277,
+    "memory_mb": 2.0,
+    "evictions": 413,
+    "hits_per_mb": 730.1
+  },
+  "pollution": {
+    "no_budget": 0.4008,
+    "budget_30": 0.3488
+  }
+}

@@ -3,7 +3,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Text, Uuid, func
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Text, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -45,3 +46,10 @@ class RequestLog(Base):
     status: Mapped[int] = mapped_column(Integer)
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
     fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    # hit | miss | admission_rejected | ineligible | bypass
+    cache_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cache_scope: Mapped[str | None] = mapped_column(Text, nullable=True)  # private | shared
+    coalesce_role: Mapped[str | None] = mapped_column(Text, nullable=True)  # none | leader | follower
+    queue_wait_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ttft_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)  # streams only
+    tags: Mapped[dict[str, str] | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)

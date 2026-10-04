@@ -8,6 +8,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from app.config import Upstream
@@ -20,6 +21,7 @@ log = logging.getLogger("tollgate.fallback")
 class _BreakerState:
     failures: int = 0
     open_until: float = 0.0
+    trial_until: float = 0.0  # a half-open trial is in progress until then
 
 
 class CircuitBreakers:
@@ -33,22 +35,34 @@ class CircuitBreakers:
         return self._states.setdefault((upstream.base_url, upstream.model), _BreakerState())
 
     def allows(self, upstream: Upstream) -> bool:
-        return self._clock() >= self._state(upstream).open_until
+        """Closed: yes. Open: no. Half-open (window passed): exactly one trial at a time; a trial
+        that never reports back frees itself after another open window."""
+        state, now = self._state(upstream), self._clock()
+        if now < state.open_until:
+            return False
+        if state.failures < self._threshold:
+            return True
+        if now < state.trial_until:
+            return False
+        state.trial_until = now + self._open_seconds
+        return True
 
     def is_open(self, upstream: Upstream) -> bool:
-        return not self.allows(upstream)
+        """Read-only (unlike allows(), which hands out the half-open trial)."""
+        return self._clock() < self._state(upstream).open_until
 
     def record_success(self, upstream: Upstream) -> None:
         state = self._state(upstream)
         if state.failures >= self._threshold:
             log.info("circuit closed", extra={"model": upstream.model})
-        state.failures, state.open_until = 0, 0.0
+        state.failures, state.open_until, state.trial_until = 0, 0.0, 0.0
 
     def record_failure(self, upstream: Upstream) -> None:
         state = self._state(upstream)
         state.failures += 1
         if state.failures >= self._threshold:
             state.open_until = self._clock() + self._open_seconds
+            state.trial_until = 0.0
             log.warning(
                 "circuit open",
                 extra={"model": upstream.model, "failures": state.failures, "open_seconds": self._open_seconds},
@@ -67,6 +81,16 @@ class ChainResult[T]:
     fallback_used: bool
 
 
+# Gateway-side errors that say nothing about the upstream's health. queue_full is a per-key limit:
+# returned as-is. queue_timeout means the model is saturated: worth falling back, but not a reason
+# to open the model's circuit breaker.
+_RETURN_AS_IS = frozenset({"queue_full"})
+_NOT_UPSTREAM_FAULT = frozenset({"queue_full", "queue_timeout"})
+
+# The deadline for the current attempt when the attempt applies it itself (see run_chain).
+current_deadline: ContextVar[float | None] = ContextVar("fallback_deadline", default=None)
+
+
 async def _attempt_with_deadline[T](
     attempt: Callable[[Upstream], Awaitable[T]], upstream: Upstream, seconds: float | None
 ) -> T:
@@ -79,18 +103,27 @@ async def _attempt_with_deadline[T](
         ) from exc
 
 
+async def with_deadline[T](call: Callable[[], Awaitable[T]], upstream: Upstream) -> T:
+    """Apply the current attempt's fallback deadline to just `call` (e.g. the upstream request,
+    excluding time spent waiting for a model slot)."""
+    return await _attempt_with_deadline(lambda _: call(), upstream, current_deadline.get())
+
+
 async def run_chain[T](
     alias: str,
     chain: Sequence[Upstream],
     breakers: CircuitBreakers,
     attempt: Callable[[Upstream], Awaitable[T]],
     fallback_timeout: float | None = None,
+    *,
+    attempt_applies_deadline: bool = False,
 ) -> ChainResult[T]:
     """Try each upstream in order, skipping open circuits. Raises the last error if all fail.
 
     fallback_timeout caps every attempt that still has a next upstream to fall back to (for streams
     that is time to first byte, since attempt returns once headers arrive). The last attempt only
-    has the HTTP client's UPSTREAM_TIMEOUT.
+    has the HTTP client's UPSTREAM_TIMEOUT. With attempt_applies_deadline the attempt receives the
+    deadline through `current_deadline` and wraps only its upstream call in `with_deadline`.
     """
     candidates = [u for u in chain if breakers.allows(u)]
     if not candidates:
@@ -100,12 +133,21 @@ async def run_chain[T](
     last_error: GatewayError | None = None
     for index, upstream in enumerate(candidates):
         has_next = index + 1 < len(candidates)
+        deadline = fallback_timeout if has_next else None
         try:
-            value = await _attempt_with_deadline(attempt, upstream, fallback_timeout if has_next else None)
+            if attempt_applies_deadline:
+                token = current_deadline.set(deadline)
+                try:
+                    value = await attempt(upstream)
+                finally:
+                    current_deadline.reset(token)
+            else:
+                value = await _attempt_with_deadline(attempt, upstream, deadline)
         except GatewayError as exc:
-            if not is_retryable(exc):
+            if exc.type in _RETURN_AS_IS or not is_retryable(exc):
                 raise
-            breakers.record_failure(upstream)
+            if exc.type not in _NOT_UPSTREAM_FAULT:
+                breakers.record_failure(upstream)
             last_error = exc
             if has_next:
                 log.warning(

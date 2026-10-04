@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.cache import CachePolicy
+
 DEFAULT_ADMIN_TOKEN = "change-me"
 
 
@@ -22,7 +24,10 @@ class Settings(BaseSettings):
     log_format: Literal["console", "json"] = "console"
 
     database_url: str = "postgresql+asyncpg://tollgate:tollgate@localhost:5432/tollgate"
+    # State (keys, limits, quotas) must never be evicted; the response cache lives in its own
+    # Redis with allkeys-lfu and a memory cap. Unset REDIS_CACHE_URL = share the state instance.
     redis_url: str = "redis://localhost:6379/0"
+    redis_cache_url: str | None = None
 
     # Where models run: "gemini" (default, Google's hosted API: light on the machine) or "ollama"
     # (fully local; start compose with --profile ollama).
@@ -59,7 +64,22 @@ class Settings(BaseSettings):
     user_max_rpm: int = 120
     user_max_daily_tokens: int = 500_000
 
-    cache_ttl: int = 3600
+    cache_ttl: int = 86_400  # per-route default; stale answers expire even when popular
+    cache_max_entry_bytes: int = 16_384
+    cache_seen_ttl: int = 3_600  # second-sight admission window
+    # "second_sight" (default) or "always" (naive baseline, for benchmarks).
+    cache_admission: Literal["second_sight", "always"] = "second_sight"
+    cache_insert_budget_per_min: int = 30  # shared scope: new entries per key per minute
+    # Identical in-flight requests share one upstream call (per process: run one worker).
+    coalescing_enabled: bool = True
+
+    # Fair queuing (VTC): the gateway owns the per-model concurrency so the provider's queue stays
+    # empty. "fifo" and "off" exist for benchmarking.
+    fair_queue_mode: Literal["fair", "fifo", "off"] = "fair"
+    upstream_max_parallel: int = 4  # in-flight requests per upstream model (Ollama: OLLAMA_NUM_PARALLEL)
+    fair_max_queue_per_key: int = 20
+    fair_max_wait_s: float = 30.0
+    fair_output_weight: float = 2.0  # output tokens cost more than input, as in the VTC paper
     breaker_failure_threshold: int = 3
     breaker_open_seconds: float = 30.0
 
@@ -70,13 +90,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _admin_token_from_file(self) -> "Settings":
-        if self.admin_token.get_secret_value() == DEFAULT_ADMIN_TOKEN and self.admin_token_file:
+        explicit = self.admin_token.get_secret_value().strip()
+        # An empty or placeholder ADMIN_TOKEN means "not set" (same rule as the dashboard).
+        if explicit and explicit != DEFAULT_ADMIN_TOKEN:
+            return self
+        if self.admin_token_file:
             try:
                 token = self.admin_token_file.read_text().strip()
-            except OSError:
-                token = ""
-            if token:
-                self.admin_token = SecretStr(token)
+            except OSError as exc:
+                raise ValueError(f"ADMIN_TOKEN_FILE {self.admin_token_file} is not readable: {exc}") from exc
+            if not token:
+                raise ValueError(f"ADMIN_TOKEN_FILE {self.admin_token_file} is empty")
+            self.admin_token = SecretStr(token)
+        else:
+            self.admin_token = SecretStr(DEFAULT_ADMIN_TOKEN)
         return self
 
     @field_validator("gemini_base_url", "mock_upstream_url", "ollama_base_url")
@@ -137,6 +164,7 @@ class Upstream:
 class Alias:
     chain: tuple[Upstream, ...]
     terse: bool = False
+    cache: CachePolicy = field(default_factory=CachePolicy)
 
 
 def upstream_models(settings: Settings) -> tuple[Upstream, Upstream]:
@@ -158,13 +186,19 @@ def upstream_models(settings: Settings) -> tuple[Upstream, Upstream]:
 def build_aliases(settings: Settings) -> dict[str, Alias]:
     fast, smart = upstream_models(settings)
     smart_chain = (smart, fast)
+    cache = CachePolicy(ttl_seconds=settings.cache_ttl)
+    # Opt-in shared pool for public content (FAQ bots): entries are reused across keys.
+    shared = CachePolicy(
+        scope="shared", ttl_seconds=settings.cache_ttl, insert_budget_per_min=settings.cache_insert_budget_per_min
+    )
     # Always-500 upstream first, so failover can be demoed on demand.
     mock = Upstream("mock-500", settings.mock_upstream_url)
     return {
-        "fast": Alias(chain=(fast,)),
-        "smart": Alias(chain=smart_chain),
-        "smart-terse": Alias(chain=smart_chain, terse=True),
-        "demo-failover": Alias(chain=(mock, fast)),
+        "fast": Alias(chain=(fast,), cache=cache),
+        "smart": Alias(chain=smart_chain, cache=cache),
+        "smart-terse": Alias(chain=smart_chain, terse=True, cache=cache),
+        "demo-failover": Alias(chain=(mock, fast), cache=cache),
+        "faq": Alias(chain=(fast,), cache=shared),
     }
 
 

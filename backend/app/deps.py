@@ -72,7 +72,11 @@ async def require_api_key(request: Request) -> KeyRecord:
 
     async with request.app.state.sessionmaker() as session:
         row = await queries.get_active_key_by_hash(session, key_hash)
-    record = KeyRecord(id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota) if row else None
+    record = (
+        KeyRecord(id=row.id, name=row.name, rpm=row.rpm, daily_token_quota=row.daily_token_quota, prefix=row.prefix)
+        if row
+        else None
+    )
     await keys.cache_set(redis, key_hash, record, request.app.state.settings.key_cache_ttl)
     if record is None:
         log.info("rejected unknown or revoked key", extra={"prefix": raw[: keys.DISPLAY_PREFIX_LENGTH]})
