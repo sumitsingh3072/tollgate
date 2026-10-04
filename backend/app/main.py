@@ -14,6 +14,7 @@ from sqlalchemy import text
 from app.api import admin, v1
 from app.config import DEFAULT_ADMIN_TOKEN, Settings, build_aliases, get_settings, upstream_models
 from app.core import tasks
+from app.core.coalesce import Coalescer
 from app.core.fallback import CircuitBreakers
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.deps import require_admin
@@ -32,6 +33,7 @@ TOLLGATE_HEADERS = [
     "x-tollgate-cache",
     "x-tollgate-fallback",
     "x-request-id",
+    "x-tollgate-coalesce",
     "x-ratelimit-limit-requests",
     "x-ratelimit-remaining-requests",
     "x-ratelimit-limit-tokens",
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await app.state.coalescer.shutdown()
         await tasks.drain()
         await app.state.log_queue.stop()  # final flush before the engine closes
         await app.state.http.aclose()
@@ -108,6 +111,7 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
     app.state.settings = settings
     app.state.aliases = build_aliases(settings)
     app.state.breakers = CircuitBreakers(settings.breaker_failure_threshold, settings.breaker_open_seconds)
+    app.state.coalescer = Coalescer()
 
     # Order matters: the last-added middleware is outermost, so request ids wrap CORS too.
     app.add_middleware(

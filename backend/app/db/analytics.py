@@ -179,6 +179,12 @@ async def totals(session: AsyncSession, window: Window) -> Totals:
     )
 
 
+async def counts_by(session: AsyncSession, window: Window, column: Any) -> dict[str | None, int]:
+    """Request counts grouped by a categorical column (cache_status, coalesce_role, ...)."""
+    result = await session.execute(select(column, func.count()).where(window.where()).group_by(column))
+    return {value: int(n) for value, n in result.all()}
+
+
 async def usage_by_key(session: AsyncSession, window: Window) -> list[KeyUsageRow]:
     tokens = func.coalesce(func.sum(TOKENS), 0)
     result = await session.execute(

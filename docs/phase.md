@@ -157,11 +157,13 @@ Spec: "Every token pays the toll": avoid repeated work, share capacity fairly, p
 - [x] /health/live liveness endpoint (container healthcheck) separate from /health readiness
 
 ## Phase 9: Request coalescing
-- [ ] Flight registry keyed by the cache key; leader runs upstream as its own task, followers
-      replay buffered chunks then wait; late joiners get the full response
-- [ ] Cancellation safety (cancel upstream only when subscribers == 0), shared errors
-- [ ] Billing per receiving key; coalesce_role logged; admit to cache when >= 2 followers
-- [ ] Metrics tollgate_coalesced_requests_total{role}; /admin/coalesce/stats
+- [x] Flight registry keyed by the cache key (+ json/sse); leader runs upstream as its own task,
+      followers replay buffered chunks then wait; late joiners get the full response
+- [x] Cancellation safety (cancel upstream only when subscribers == 0), shared errors; every
+      upstream call runs in a Flight (private ones for non-coalescable requests)
+- [x] Billing per receiving key; coalesce_role logged; x-tollgate-coalesce header; admit to cache
+      immediately when >= 2 followers; COALESCING_ENABLED toggle (benchmarks)
+- [x] Metrics tollgate_coalesced_requests_total{role}; /admin/coalesce/stats
 
 ## Phase 10: Fair queuing (VTC)
 - [ ] Gateway-owned concurrency per upstream model (UPSTREAM_MAX_PARALLEL) so the provider's

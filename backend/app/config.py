@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     cache_ttl: int = 86_400  # per-route default; stale answers expire even when popular
     cache_max_entry_bytes: int = 16_384
     cache_seen_ttl: int = 3_600  # second-sight admission window
+    # Identical in-flight requests share one upstream call (per process: run one worker).
+    coalescing_enabled: bool = True
     breaker_failure_threshold: int = 3
     breaker_open_seconds: float = 30.0
 

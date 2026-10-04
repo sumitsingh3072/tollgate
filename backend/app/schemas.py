@@ -193,3 +193,14 @@ class Me(BaseModel):
     owner_id: str | None = Field(description="None for the operator (ADMIN_TOKEN only)")
     active_keys: int
     limits: UserLimits | None = Field(description="Self-serve caps; None for the operator")
+
+
+class CoalesceStats(BaseModel):
+    window_hours: int
+    leaders: int = Field(description="Requests that made the upstream call for a group")
+    followers: int = Field(description="Requests served from another request's upstream call")
+    calls_saved: int
+    share_rate: float = Field(description="followers / (leaders + followers)")
+    in_flight: int = Field(description="Coalescable upstream calls running now")
+    largest_fanout_since_start: int
+    flights_since_start: int

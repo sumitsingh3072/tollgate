@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from app.config import Settings
 from app.core import keys, limits
 from app.db import analytics, queries
+from app.db.models import RequestLog
 from app.deps import AdminScope, admin_scope, require_admin
 from app.errors import GatewayError
 from app.schemas import (
     ActivityDay,
     AliasOut,
+    CoalesceStats,
     GroupUsage,
     KeyCreate,
     KeyCreated,
@@ -149,6 +151,29 @@ async def stats(
         by_key=[KeyUsage(**asdict(row)) for row in by_key],
         by_alias=[GroupUsage(**asdict(row)) for row in by_alias],
         by_model=[GroupUsage(**asdict(row)) for row in by_model],
+    )
+
+
+@router.get("/coalesce/stats")
+async def coalesce_stats(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    scope: AdminScope = Depends(admin_scope),
+) -> CoalesceStats:
+    window = analytics.Window.last(hours, owner_id=scope.owner_id)
+    async with request.app.state.sessionmaker() as session:
+        roles = await analytics.counts_by(session, window, RequestLog.coalesce_role)
+    leaders, followers = roles.get("leader", 0), roles.get("follower", 0)
+    coalescer = request.app.state.coalescer
+    return CoalesceStats(
+        window_hours=hours,
+        leaders=leaders,
+        followers=followers,
+        calls_saved=followers,
+        share_rate=_rate(followers, leaders + followers),
+        in_flight=coalescer.in_flight,
+        largest_fanout_since_start=coalescer.stats.largest_fanout,
+        flights_since_start=coalescer.stats.flights,
     )
 
 

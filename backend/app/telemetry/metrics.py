@@ -33,6 +33,7 @@ cache_requests = Counter("tollgate_cache_requests_total", "Cache outcomes per re
 cache_admission_rejected = Counter(
     "tollgate_cache_admission_rejected_total", "Cacheable responses not stored on first sighting."
 )
+coalesced_requests = Counter("tollgate_coalesced_requests_total", "Requests that shared an upstream call.", ["role"])
 
 
 def observe(event: LogEvent) -> None:
@@ -48,6 +49,8 @@ def observe(event: LogEvent) -> None:
         cache_requests.labels(event.cache_status).inc()
         if event.cache_status == "admission_rejected":
             cache_admission_rejected.inc()
+    if event.coalesce_role in ("leader", "follower"):
+        coalesced_requests.labels(event.coalesce_role).inc()
 
 
 def render() -> tuple[bytes, str]:

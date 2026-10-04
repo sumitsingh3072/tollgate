@@ -87,7 +87,7 @@ async def test_every_outcome_is_logged(client, auth, app: FastAPI, gemini, setti
         "miss",
         "hit",
     )
-    assert stream_log["cache_status"] == "bypass" and stream_log["ttft_ms"] is not None
+    assert stream_log["cache_status"] == "ineligible" and stream_log["ttft_ms"] is not None
     assert (miss["status"], miss["cache_hit"], miss["in_tokens"], miss["out_tokens"]) == (200, False, 4, 8)
     assert miss["model_used"] == settings.gemini_fast_model and miss["key_prefix"].startswith("tg_live_")
     assert (cache_hit["cache_hit"], cache_hit["in_tokens"] + cache_hit["out_tokens"]) == (True, 0)

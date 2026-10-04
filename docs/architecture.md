@@ -114,6 +114,8 @@ flowchart LR
 | GET    | /admin/aliases        | Aliases with their model chains          |
 | GET    | /admin/activity       | Daily totals for the activity heatmap    |
 | GET    | /admin/me             | Caller's scope, active keys and caps     |
+| GET    | /admin/coalesce/stats | Calls saved, share rate, largest fan-out |
+| GET    | /metrics              | Prometheus (admin token)                 |
 
 ## Data model (Neon)
 api_keys: id uuid pk, name text, key_hash text unique, prefix text, rpm int,
