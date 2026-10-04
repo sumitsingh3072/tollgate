@@ -87,16 +87,42 @@ cache: hit.
 Done when: stats reflect requests just made; no DB call on the request path.
 
 ## Phase 5: Dashboard (shadcn, Linear-style, light + dark)
-- [ ] Shared: loading skeletons, error + empty states, toasts (sonner)
-- [ ] Overview: stat cards + tokens-by-key bar chart (Recharts, theme-aware colors)
-- [ ] Keys: create dialog (show key once, copy button), table, revoke confirm
-- [ ] Logs: table with status/cache/fallback badges, filters, pagination
-- [ ] Playground: alias picker, streaming output, shows response headers
-- [ ] Command menu (⌘K) for navigation
+- [x] Shared: loading skeletons (Suspense), error boundary + empty states, 404, toasts (sonner)
+- [x] Overview: stat cards + tokens-by-key and requests-by-model charts (Recharts via
+      shadcn chart, theme tokens), 24h / 7d / 30d window
+- [x] Keys: create dialog (show key once, copy button), table with quota bars, revoke confirm
+- [x] Logs: table with status/cache/fallback badges, URL-driven filters, keyset pagination
+- [x] Playground: alias picker (with chain), multi-turn streaming chat, stop, response
+      headers + timing + usage panel; key kept in sessionStorage
+- [x] Command menu (⌘K) for navigation and theme
+- [x] Richer Overview: stat tiles with delta vs previous window + sparkline, traffic
+      chart (requests / tokens / latency), GitHub-style yearly activity heatmap,
+      status mix, latency histogram, model and alias breakdown tables; chart palette
+      validated for both themes (dataviz validator)
+- [x] scripts/seed_demo.py: a year of synthetic traffic for demos (explicit DB URL only)
+- [x] Backend: GET /admin/aliases; CORS exposes x-ratelimit-* / retry-after
 Done when: create key -> chat in Playground -> see it in Logs and Overview,
 in both light and dark themes.
 
-## Phase 6: Hardening and ship
+## Phase 6: Accounts (Clerk) and landing page
+- [ ] Public landing page at / (hero, features, OpenAI SDK snippet, CTA); dashboard
+      moves under /dashboard/* via route groups ((marketing) and (app))
+- [ ] Clerk (@clerk/nextjs): sign-in / sign-up pages, UserButton in the header,
+      proxy.ts protects /dashboard/*; GitHub + Google OAuth and email enabled in Clerk
+- [ ] Backend ownership: api_keys.owner_id (Clerk user id) with an idempotent
+      ADD COLUMN IF NOT EXISTS at startup (no Alembic); keys, stats and logs scoped
+      to the owner
+- [ ] Trust model: dashboard server calls /admin with ADMIN_TOKEN + X-Tollgate-User
+      (from Clerk auth()); the gateway requires the header for user-scoped routes,
+      ADMIN_TOKEN alone keeps a full operator view
+- [ ] Abuse/cost guards (shared GEMINI_API_KEY): max keys per user, max rpm and
+      daily quota per key for self-serve users (env-configurable)
+- [ ] Tests: ownership isolation (user A cannot see/revoke user B's keys or logs)
+Done when: two different sign-ins each create keys and only see their own keys,
+logs and stats; signed-out visitors see the landing page and get redirected from
+/dashboard.
+
+## Phase 7: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
 - [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table
@@ -104,3 +130,4 @@ in both light and dark themes.
 Done when: a stranger can run it from the README in under 10 minutes.
 
 Cut order if late: command menu -> circuit breaker -> terse mode -> Overview charts.
+Phase 6 is optional for a single-team deployment (ADMIN_TOKEN-only mode keeps working).

@@ -1,6 +1,9 @@
-import { PlaceholderPage } from "@/components/placeholder-page";
-import { NAV_ITEMS } from "@/lib/nav";
+import { admin } from "@/lib/server/gateway";
+import type { AliasInfo } from "@/lib/types";
 
-export default function PlaygroundPage() {
-  return <PlaceholderPage item={NAV_ITEMS[3]} phase={5} />;
+import { Playground } from "./_components/playground";
+
+export default async function PlaygroundPage() {
+  const aliases = await admin<AliasInfo[]>("/aliases");
+  return <Playground aliases={aliases} />;
 }

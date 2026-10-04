@@ -24,7 +24,18 @@ from app.middleware import RequestContextMiddleware
 log = logging.getLogger("tollgate")
 
 HEALTH_CHECK_TIMEOUT = 3.0  # Neon can take ~1-2s to wake from scale-to-zero
-TOLLGATE_HEADERS = ["x-tollgate-model", "x-tollgate-cache", "x-tollgate-fallback", "x-request-id"]
+# Exposed to browsers (the dashboard Playground reads them).
+TOLLGATE_HEADERS = [
+    "x-tollgate-model",
+    "x-tollgate-cache",
+    "x-tollgate-fallback",
+    "x-request-id",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-tokens",
+    "retry-after",
+]
 
 
 def _warn_on_insecure_config(settings: Settings) -> None:

@@ -17,6 +17,8 @@ added to an alias chain the same way.
   Works with the OpenAI SDK, Open WebUI, Continue, n8n.
 - Admin / team lead: uses the Next.js dashboard to create and revoke keys, watch
   usage, cache hits, latency and failovers, and test in the Playground.
+- Self-serve user (Phase 6): signs in with Clerk (GitHub/Google/email) from the
+  landing page and manages only their own keys, logs and usage, within per-user caps.
 
 ## Model aliases (the "model" field acts like a mode switch)
 | Alias          | Chain (in order)                            | Notes                    |
@@ -59,7 +61,8 @@ Logs, Playground), mock failing upstream for demos.
 
 ## Out of scope
 Multiple orgs/projects, dollar pricing, semantic cache, OpenTelemetry/Grafana,
-prompt library, alerts, Alembic migrations, user login (single ADMIN_TOKEN),
+prompt library, alerts, Alembic migrations, teams/orgs and roles beyond
+owner vs operator, billing,
 non-chat endpoints (embeddings, images).
 
 ## Golden rule

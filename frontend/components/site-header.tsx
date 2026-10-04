@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 
+import { CommandMenu } from "@/components/command-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -16,6 +17,7 @@ export function SiteHeader() {
       <Separator orientation="vertical" className="mr-1 data-vertical:h-4 data-vertical:self-center" />
       <span className="font-medium">{item?.label ?? "Tollgate"}</span>
       <div className="ml-auto flex items-center gap-1">
+        <CommandMenu />
         <ThemeToggle />
       </div>
     </header>

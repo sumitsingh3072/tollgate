@@ -8,4 +8,6 @@ pnpm dev        # http://localhost:3000
 pnpm lint && pnpm build
 ```
 
-Admin calls go through `app/api/admin/[...path]` so `ADMIN_TOKEN` never reaches the browser.
+Admin data is read in Server Components and changed through Server Actions (`app/actions.ts`),
+so `ADMIN_TOKEN` never reaches the browser. The Playground calls the gateway's `/v1` directly
+with a pasted Tollgate key.
