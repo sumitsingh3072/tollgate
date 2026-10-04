@@ -43,7 +43,17 @@ export function GatewayStatus() {
   }, []);
 
   const label = health ? LABEL[health.status] : "Checking gateway…";
-  const detail = health ? `Redis ${health.redis ? "up" : "down"} · DB ${health.db ? "up" : "down"}` : undefined;
+  const detail = health
+    ? [
+        `Redis ${health.redis ? "up" : "down"}`,
+        `DB ${health.db ? "up" : "down"}`,
+        ...(health.upstream === false
+          ? [health.provider === "ollama" ? "models downloading or missing" : "GEMINI_API_KEY not set"]
+          : health.provider
+            ? [`${health.provider === "ollama" ? "Ollama" : "Gemini"} ready`]
+            : []),
+      ].join(" · ")
+    : undefined;
 
   return (
     <SidebarMenuButton tooltip={detail ? `${label} — ${detail}` : label} className="cursor-default" aria-live="polite">

@@ -1,18 +1,43 @@
-# Full stack: docker compose up -d --build
-# Infra only (for host dev):   docker compose up -d redis
-# With local Postgres:         docker compose --profile localdb up -d
-# Host ports are overridable (REDIS_PORT, POSTGRES_PORT, MOCK_PORT, BACKEND_PORT, FRONTEND_PORT).
+# Tollgate: git clone, put GEMINI_API_KEY in .env, docker compose up -d
+#
+# Defaults: models via the Gemini API (light on your machine), data in a bundled Postgres, the
+# admin token generated for you, and a dashboard without sign-in on localhost.
+# Optional (see .env.example): fully local models with Ollama, Neon instead of the bundled
+# Postgres, Clerk accounts and exposed ports for a remote/public deployment.
+#
+#   docker compose up -d                        # start
+#   docker compose --profile ollama up -d       # also run local models (set UPSTREAM_PROVIDER=ollama)
+#   docker compose down                         # stop (data is kept in volumes)
 
 x-restart: &restart
   restart: unless-stopped
 
+x-env-file: &env-file
+  env_file:
+    - path: .env
+      required: false
+
 services:
+  # One-shot: generates the admin token shared by the gateway and dashboard (kept across restarts).
+  secrets-init:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - |
+        f=/run/tollgate/admin_token
+        if [ ! -s "$$f" ]; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$$f"
+          echo "generated admin token"
+        fi
+        chmod 444 "$$f"
+    volumes:
+      - secrets:/run/tollgate
+
   redis:
     <<: *restart
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -21,14 +46,11 @@ services:
 
   postgres:
     <<: *restart
-    profiles: ["localdb"]
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: tollgate
       POSTGRES_PASSWORD: tollgate
       POSTGRES_DB: tollgate
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -37,31 +59,74 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
+  # Local models (opt-in): docker compose --profile ollama up -d, with UPSTREAM_PROVIDER=ollama.
+  ollama:
     <<: *restart
-    build: ./backend
-    env_file: .env
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # NVIDIA GPU: docker compose -f docker-compose.yml -f compose.gpu.yml up -d
+
+  # One-shot: pulls the local models into the ollama volume. Re-runs are instant.
+  ollama-init:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    <<: *env-file
     environment:
-      REDIS_URL: redis://redis:6379/0
-      MOCK_UPSTREAM_URL: http://mock-upstream:9000/v1
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      OLLAMA_HOST: ollama:11434
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for model in "$${OLLAMA_FAST_MODEL:-gemma3:1b}" "$${OLLAMA_SMART_MODEL:-gemma3:4b}"; do
+          echo "pulling $$model (first run only)"; ollama pull "$$model" || exit 1
+        done
     depends_on:
-      redis:
+      ollama:
         condition: service_healthy
 
   mock-upstream:
     <<: *restart
     build: ./backend
     command: ["python", "mock_upstream.py"]
-    ports:
-      - "127.0.0.1:${MOCK_PORT:-9000}:9000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 3
+
+  backend:
+    <<: [*restart, *env-file]
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://tollgate:tollgate@postgres:5432/tollgate}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      MOCK_UPSTREAM_URL: http://mock-upstream:9000/v1
+      ADMIN_TOKEN_FILE: /run/tollgate/admin_token
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    volumes:
+      - secrets:/run/tollgate:ro
+    ports:
+      # Local by default. For remote access set BIND_ADDRESS=0.0.0.0 (and put TLS in front).
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+        required: false # only with --profile ollama
 
   frontend:
     <<: *restart
@@ -69,17 +134,25 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in .env}
+        # Empty = local mode (no sign-in). Set Clerk keys in .env for a public deployment.
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
     environment:
       GATEWAY_URL: http://backend:8000
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
-      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?set CLERK_SECRET_KEY in .env}
+      # Same precedence as the gateway: an explicit ADMIN_TOKEN in .env, else the generated file.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      ADMIN_TOKEN_FILE: /run/tollgate/admin_token
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+    volumes:
+      - secrets:/run/tollgate:ro
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # Without Clerk the dashboard has no sign-in: keep it on localhost unless accounts are enabled.
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
 
 volumes:
   pgdata:
+  ollama:
+  secrets:

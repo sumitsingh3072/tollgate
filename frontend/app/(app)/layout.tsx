@@ -4,11 +4,12 @@ import { cookies } from "next/headers";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { CLERK_ENABLED } from "@/lib/auth-config";
 
-// Signed-in app shell. Signed-out visitors are sent to /sign-in; every admin call re-checks the user
-// (lib/server/gateway.ts), so client-side navigations that skip this layout stay protected too.
+// App shell. With Clerk, signed-out visitors are sent to /sign-in and every admin call re-checks the
+// user (lib/server/gateway.ts), so client-side navigations that skip this layout stay protected too.
 export default async function AppLayout({ children }: LayoutProps<"/">) {
-  await auth.protect();
+  if (CLERK_ENABLED) await auth.protect();
   // Persisted by the shadcn sidebar so the collapsed state survives reloads without a layout shift.
   const sidebarOpen = (await cookies()).get("sidebar_state")?.value !== "false";
 

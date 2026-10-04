@@ -16,6 +16,7 @@ import { CodeTabs } from "@/components/marketing/code-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { GATEWAY_URL } from "@/lib/api";
+import { START_HREF } from "@/lib/auth-config";
 
 const FEATURES = [
   {
@@ -56,7 +57,7 @@ const FEATURES = [
 ];
 
 const STEPS = [
-  { title: "Create a key", body: "Sign in and create a key with its own rate limit and daily token quota." },
+  { title: "Create a key", body: "Open the dashboard and create a key with its own rate limit and daily token quota." },
   { title: "Change one line", body: "Point any OpenAI SDK, Open WebUI or n8n at the gateway with base_url." },
   { title: "Watch it work", body: "See traffic, cache hits, fallbacks and latency in the dashboard as they happen." },
 ];
@@ -90,7 +91,7 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-6xl px-4 pt-20 pb-12 text-center md:px-6 md:pt-28">
           <Badge variant="outline" className="mb-6 gap-1.5 rounded-full px-3 py-1 text-xs">
             <span className="size-1.5 rounded-full bg-success" />
-            OpenAI-compatible · Gemma 4 ready
+            OpenAI-compatible · local with Ollama or hosted with Gemini
           </Badge>
           <h1 className="mx-auto max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl md:text-6xl">
             The gateway between your apps and your models
@@ -100,7 +101,7 @@ export default function LandingPage() {
             exactly one line: <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">base_url</code>.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Button size="lg" render={<Link href="/sign-up" />}>
+            <Button size="lg" render={<Link href={START_HREF} />}>
               Get started
               <ArrowRightIcon />
             </Button>
@@ -158,12 +159,15 @@ export default function LandingPage() {
           ))}
           <div className="flex flex-col justify-center gap-3 bg-card p-6">
             <p className="font-medium">And it&apos;s yours</p>
-            <p className="text-muted-foreground">Self-host with one docker compose command. Your keys, your logs, your models.</p>
+            <p className="text-muted-foreground">
+              <code className="font-mono text-foreground">docker compose up</code> runs everything locally: models,
+              database and dashboard. Your keys, your logs, your models.
+            </p>
           </div>
         </div>
       </Section>
 
-      <Section id="how-it-works" eyebrow="How it works" title="From sign-up to first request in a minute">
+      <Section id="how-it-works" eyebrow="How it works" title="From docker compose up to first request in minutes">
         <ol className="grid gap-4 md:grid-cols-3">
           {STEPS.map((step, i) => (
             <li key={step.title} className="rounded-xl border bg-card p-6">
@@ -208,7 +212,7 @@ export default function LandingPage() {
           <p className="relative mx-auto mt-3 max-w-xl text-muted-foreground">
             Create a key, change one line, and see every request in the dashboard.
           </p>
-          <Button size="lg" className="relative mt-8" render={<Link href="/sign-up" />}>
+          <Button size="lg" className="relative mt-8" render={<Link href={START_HREF} />}>
             Get started
             <ArrowRightIcon />
           </Button>

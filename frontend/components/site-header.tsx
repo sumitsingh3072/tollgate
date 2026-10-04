@@ -8,6 +8,7 @@ import { CommandMenu } from "@/components/command-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { CLERK_ENABLED } from "@/lib/auth-config";
 import { findNavItem } from "@/lib/nav";
 
 export function SiteHeader() {
@@ -21,9 +22,11 @@ export function SiteHeader() {
       <div className="ml-auto flex items-center gap-1">
         <CommandMenu />
         <ThemeToggle />
-        <div className="ml-1 flex size-7 items-center justify-center">
-          <UserButton />
-        </div>
+        {CLERK_ENABLED && (
+          <div className="ml-1 flex size-7 items-center justify-center">
+            <UserButton />
+          </div>
+        )}
       </div>
     </header>
   );

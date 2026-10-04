@@ -124,7 +124,23 @@ Done when: two different sign-ins each create keys and only see their own keys,
 logs and stats; signed-out visitors see the landing page and get redirected from
 /dashboard.
 
-## Phase 7: Hardening and ship
+## Phase 7: Easy self-hosting (API by default, local optional)
+- [x] Provider switch: UPSTREAM_PROVIDER=gemini (default, light on the machine) | ollama
+      (local; gemma3:1b / gemma3:4b by default)
+- [x] docker compose with only GEMINI_API_KEY set: bundled Postgres, Redis, generated
+      admin token (secrets-init) shared by gateway and dashboard via ADMIN_TOKEN_FILE;
+      `--profile ollama` adds Ollama + a one-shot model pull into a volume
+- [x] Accounts optional: no Clerk keys = local mode (no sign-in, operator view);
+      Clerk keys = public multi-user mode
+- [x] Remote-ready: BIND_ADDRESS (localhost by default), NEXT_PUBLIC_GATEWAY_URL,
+      CORS_ORIGINS; infra ports unpublished by default (compose.dev.yml for host dev),
+      compose.gpu.yml for NVIDIA
+- [x] /health reports whether the provider is usable (Gemini key set / Ollama models
+      pulled); sidebar shows it
+Done when: a clean copy with only GEMINI_API_KEY in .env comes up with
+`docker compose up -d`, the dashboard opens without sign-in, and a chat is answered.
+
+## Phase 8: Hardening and ship
 - [ ] GitHub Actions CI: ruff, pytest, pnpm lint + build, docker build
 - [ ] README: pitch, Mermaid diagram, quickstart (docker + local), SDK + Open WebUI examples
 - [ ] Benchmark script: 20 prompts on smart vs smart-terse; results table

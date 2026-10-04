@@ -1,8 +1,12 @@
 import { clerkMiddleware } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-// Attaches the Clerk session to every request. Access checks live next to the data:
+import { CLERK_ENABLED } from "@/lib/auth-config";
+
+// With Clerk: attach the session to every request. Access checks live next to the data:
 // app/(app)/layout.tsx (auth.protect) and lib/server/gateway.ts (every admin call needs a user).
-export default clerkMiddleware();
+// Local mode (no Clerk keys): nothing to do.
+export default CLERK_ENABLED ? clerkMiddleware() : () => NextResponse.next();
 
 export const config = {
   matcher: [
