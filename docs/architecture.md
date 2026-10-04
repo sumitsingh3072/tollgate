@@ -10,13 +10,15 @@
   upstream models,
   OpenAI-compatible, Bearer GEMINI_API_KEY. The key lives only in the gateway.
 - Mock upstream (:9000): always returns 500, used to demo failover.
-- Dashboard (Next.js, :3000): calls /admin via its own server-side route handler
-  (adds ADMIN_TOKEN); Playground calls /v1 directly with a pasted Tollgate key.
+- Dashboard (Next.js, :3000): Server Components read /admin server-side and
+  Server Actions mutate it (ADMIN_TOKEN never reaches the browser); pages stream
+  behind Suspense skeletons. Playground calls /v1 directly from the browser with
+  a pasted Tollgate key.
 
 ```mermaid
 flowchart LR
   App[App / OpenAI SDK / Open WebUI] -->|/v1 + tg key| GW[FastAPI Gateway]
-  Dash[Next.js Dashboard] -->|/api/admin proxy + ADMIN_TOKEN| GW
+  Dash[Next.js Dashboard] -->|server-side /admin + ADMIN_TOKEN| GW
   GW <--> R[(Redis)]
   GW --> Q[Log queue] -->|batch every 2s| DB[(Neon Postgres)]
   GW -->|admin queries| DB
@@ -85,6 +87,7 @@ flowchart LR
 | DELETE | /admin/keys/{id}      | Revoke (also deletes Redis cache entry)  |
 | GET    | /admin/stats          | Totals, tokens by key, cache rate, p50/p95|
 | GET    | /admin/logs           | Paginated logs, filters: key, alias, status|
+| GET    | /admin/aliases        | Aliases with their model chains          |
 
 ## Data model (Neon)
 api_keys: id uuid pk, name text, key_hash text unique, prefix text, rpm int,
@@ -140,20 +143,21 @@ tollgate/
 ├── frontend/
 │   ├── app/
 │   │   ├── layout.tsx               # theme script, SidebarProvider, inset shell
-│   │   ├── page.tsx                 # Overview
-│   │   ├── keys/page.tsx
-│   │   ├── logs/page.tsx
-│   │   ├── playground/page.tsx
-│   │   └── api/
-│   │       ├── admin/[...path]/route.ts   # adds ADMIN_TOKEN server-side
-│   │       └── health/route.ts            # gateway status for the sidebar
+│   │   ├── actions.ts               # Server Actions: createKey, revokeKey (+ refresh())
+│   │   ├── error.tsx, not-found.tsx
+│   │   ├── page.tsx + _components/overview.tsx      # Overview (stats, charts)
+│   │   ├── keys/ (page.tsx, _components/: keys-table, create-key-dialog, revoke-key-button)
+│   │   ├── logs/ (page.tsx, _components/: logs-table, log-filters)
+│   │   ├── playground/ (page.tsx, _components/: playground, use-chat)
+│   │   └── api/health/route.ts      # gateway status for the sidebar
 │   ├── components/
 │   │   ├── ui/                      # shadcn (base-nova)
-│   │   ├── app-sidebar, site-header, page-header, theme-toggle, theme-script,
-│   │   │   gateway-status
-│   │   └── stat-card, usage-chart, logs-table, create-key-dialog (Phase 5)
-│   ├── hooks/use-mobile.ts
-│   ├── lib/ (api.ts, nav.ts, theme.ts, theme-config.ts, types.ts, server/gateway.ts)
+│   │   └── app-sidebar, site-header, command-menu, page-header, stat-card, usage-chart,
+│   │       local-time, copy-button, window-select, refresh-button, error-state,
+│   │       theme-toggle, theme-script, gateway-status
+│   ├── hooks/ (use-mobile.ts, use-session-storage.ts)
+│   ├── lib/ (api.ts, format.ts, nav.ts, search-params.ts, sse.ts, theme*.ts, types.ts,
+│   │         server/gateway.ts)
 │   ├── Dockerfile                   # standalone output, non-root
 │   └── .env.example
 ├── docs/ (plan.md, architecture.md, phase.md)

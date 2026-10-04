@@ -87,12 +87,15 @@ cache: hit.
 Done when: stats reflect requests just made; no DB call on the request path.
 
 ## Phase 5: Dashboard (shadcn, Linear-style, light + dark)
-- [ ] Shared: loading skeletons, error + empty states, toasts (sonner)
-- [ ] Overview: stat cards + tokens-by-key bar chart (Recharts, theme-aware colors)
-- [ ] Keys: create dialog (show key once, copy button), table, revoke confirm
-- [ ] Logs: table with status/cache/fallback badges, filters, pagination
-- [ ] Playground: alias picker, streaming output, shows response headers
-- [ ] Command menu (⌘K) for navigation
+- [x] Shared: loading skeletons (Suspense), error boundary + empty states, 404, toasts (sonner)
+- [x] Overview: stat cards + tokens-by-key and requests-by-model charts (Recharts via
+      shadcn chart, theme tokens), 24h / 7d / 30d window
+- [x] Keys: create dialog (show key once, copy button), table with quota bars, revoke confirm
+- [x] Logs: table with status/cache/fallback badges, URL-driven filters, keyset pagination
+- [x] Playground: alias picker (with chain), multi-turn streaming chat, stop, response
+      headers + timing + usage panel; key kept in sessionStorage
+- [x] Command menu (⌘K) for navigation and theme
+- [x] Backend: GET /admin/aliases; CORS exposes x-ratelimit-* / retry-after
 Done when: create key -> chat in Playground -> see it in Logs and Overview,
 in both light and dark themes.
 

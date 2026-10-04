@@ -11,7 +11,7 @@ from app.core import keys, limits
 from app.db import queries
 from app.deps import require_admin
 from app.errors import GatewayError
-from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUsage, LogOut, LogPage, ModelUsage, Stats
+from app.schemas import AliasOut, KeyCreate, KeyCreated, KeyOut, KeyUsage, LogOut, LogPage, ModelUsage, Stats
 
 log = logging.getLogger("tollgate.admin")
 
@@ -96,3 +96,11 @@ async def logs(
         for log_row, name, prefix in rows[:limit]
     ]
     return LogPage(items=items, next_cursor=items[-1].id if len(rows) > limit else None)
+
+
+@router.get("/aliases")
+async def aliases(request: Request) -> list[AliasOut]:
+    return [
+        AliasOut(id=name, chain=[u.model for u in alias.chain], terse=alias.terse)
+        for name, alias in request.app.state.aliases.items()
+    ]

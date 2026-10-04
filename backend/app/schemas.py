@@ -127,3 +127,9 @@ class LogOut(BaseModel):
 class LogPage(BaseModel):
     items: list[LogOut]
     next_cursor: int | None = Field(description="Pass as ?before= to fetch the next (older) page.")
+
+
+class AliasOut(BaseModel):
+    id: str
+    chain: list[str] = Field(description="Upstream models in fallback order")
+    terse: bool

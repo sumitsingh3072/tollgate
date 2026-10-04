@@ -165,3 +165,10 @@ def test_percentile_matches_percentile_cont() -> None:
     assert _percentile([], 0.5) is None
     assert _percentile([10, 20, 30, 40], 0.5) == 25
     assert _percentile([10, 20, 30, 40, 100], 0.95) == pytest.approx(88.0)
+
+
+async def test_aliases_endpoint(client, settings: Settings) -> None:
+    aliases = {a["id"]: a for a in (await client.get("/admin/aliases", headers=ADMIN_HEADERS)).json()}
+    assert aliases["smart"]["chain"] == [settings.gemini_smart_model, settings.gemini_fast_model]
+    assert aliases["smart-terse"]["terse"] is True
+    assert aliases["demo-failover"]["chain"][0] == "mock-500"
