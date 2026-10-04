@@ -20,7 +20,7 @@ function readFilters(params: SearchParams): LogFilterValues {
   };
 }
 
-export default async function LogsPage({ searchParams }: PageProps<"/logs">) {
+export default async function LogsPage({ searchParams }: PageProps<"/dashboard/logs">) {
   const params = await searchParams;
   const filters = readFilters(params);
   const before = intParam(params, "before");

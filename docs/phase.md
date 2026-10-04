@@ -105,19 +105,21 @@ Done when: create key -> chat in Playground -> see it in Logs and Overview,
 in both light and dark themes.
 
 ## Phase 6: Accounts (Clerk) and landing page
-- [ ] Public landing page at / (hero, features, OpenAI SDK snippet, CTA); dashboard
-      moves under /dashboard/* via route groups ((marketing) and (app))
-- [ ] Clerk (@clerk/nextjs): sign-in / sign-up pages, UserButton in the header,
-      proxy.ts protects /dashboard/*; GitHub + Google OAuth and email enabled in Clerk
-- [ ] Backend ownership: api_keys.owner_id (Clerk user id) with an idempotent
-      ADD COLUMN IF NOT EXISTS at startup (no Alembic); keys, stats and logs scoped
-      to the owner
-- [ ] Trust model: dashboard server calls /admin with ADMIN_TOKEN + X-Tollgate-User
-      (from Clerk auth()); the gateway requires the header for user-scoped routes,
-      ADMIN_TOKEN alone keeps a full operator view
-- [ ] Abuse/cost guards (shared GEMINI_API_KEY): max keys per user, max rpm and
-      daily quota per key for self-serve users (env-configurable)
-- [ ] Tests: ownership isolation (user A cannot see/revoke user B's keys or logs)
+- [x] Public landing page at / (hero with real product shot, numbers, features, how it
+      works, quickstart code tabs, CTA); dashboard moves under /dashboard/* via route
+      groups ((marketing) and (app))
+- [x] Clerk (@clerk/nextjs 7): own /sign-in and /sign-up pages themed with our tokens
+      (--clerk-* vars), UserButton in the header; auth checked where data is read
+      ((app)/layout auth.protect + every admin call), not by path matching
+- [x] Backend ownership: api_keys.owner_id (Clerk user id) with an idempotent
+      ADD COLUMN IF NOT EXISTS at startup (no Alembic); keys, stats, activity and logs
+      scoped to the owner
+- [x] Trust model: dashboard server calls /admin with ADMIN_TOKEN + X-Tollgate-User
+      (from Clerk auth()); ADMIN_TOKEN alone keeps a full operator view
+- [x] Abuse/cost guards (shared GEMINI_API_KEY): max keys per user, max rpm and
+      daily quota per key for self-serve users (env-configurable); GET /admin/me
+- [x] Tests: ownership isolation (user A cannot see/revoke user B's keys or logs)
+- [x] Docker: Clerk publishable key baked in at build, secret key at runtime
 Done when: two different sign-ins each create keys and only see their own keys,
 logs and stats; signed-out visitors see the landing page and get redirected from
 /dashboard.

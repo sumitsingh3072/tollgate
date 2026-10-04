@@ -9,7 +9,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,19 +33,26 @@ _MAX_POINTS = 48
 
 @dataclass(frozen=True)
 class Window:
+    """A time range, optionally limited to the keys of one owner (None = operator view)."""
+
     since: datetime
     until: datetime
+    owner_id: str | None = None
 
     @classmethod
-    def last(cls, hours: int, now: datetime | None = None) -> "Window":
+    def last(cls, hours: int, owner_id: str | None = None, now: datetime | None = None) -> "Window":
         now = now or datetime.now(UTC)
-        return cls(since=now - timedelta(hours=hours), until=now)
+        return cls(since=now - timedelta(hours=hours), until=now, owner_id=owner_id)
 
     def previous(self) -> "Window":
-        return Window(since=self.since - (self.until - self.since), until=self.since)
+        return replace(self, since=self.since - (self.until - self.since), until=self.since)
 
     def where(self) -> Any:
-        return (RequestLog.ts >= self.since) & (RequestLog.ts < self.until)
+        clause = (RequestLog.ts >= self.since) & (RequestLog.ts < self.until)
+        if self.owner_id is not None:
+            owned = select(ApiKey.id).where(ApiKey.owner_id == self.owner_id)
+            clause = clause & RequestLog.key_id.in_(owned)
+        return clause
 
 
 @dataclass(frozen=True)

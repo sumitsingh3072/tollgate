@@ -20,7 +20,7 @@ cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
 cd backend && .venv/bin/python mock_upstream.py   # :9000, always 500
 cd backend && .venv/bin/python scripts/smoke_openai.py --model fast   # SDK end-to-end
 cd backend && .venv/bin/python -m scripts.seed_demo --database-url <local-db-url>   # demo data (never prod)
-cd frontend && cp .env.example .env.local && pnpm dev   # :3000
+cd frontend && cp .env.example .env.local && pnpm dev   # :3000 (needs Clerk keys in .env.local)
 cd backend && .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 cd frontend && pnpm lint && pnpm build
 ```
@@ -33,6 +33,7 @@ cd frontend && pnpm lint && pnpm build
 - Log via `logging.getLogger("tollgate.<module>")` with `extra={...}` fields; never log secrets or prompts.
 - Raise `GatewayError` for client-facing failures; responses use the OpenAI error envelope.
 - Secrets are `SecretStr`; the Gemini key lives only in the backend, ADMIN_TOKEN only server-side in Next.
+- Auth: Clerk. Check auth where data is read (auth.protect / admin()), never by path matching in proxy.ts.
 - Frontend: shadcn components (base-nova, Base UI `render` prop, not `asChild`), theme tokens from
   `app/globals.css` (no hard-coded colors), Linear-style density; verify light and dark.
 - Frontend is Next.js 16 (async `params`, `RouteContext`, Tailwind v4). Check `frontend/node_modules/next/dist/docs/` before using Next APIs.

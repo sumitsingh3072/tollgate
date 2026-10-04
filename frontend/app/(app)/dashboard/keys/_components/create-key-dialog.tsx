@@ -19,11 +19,15 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import type { CreatedApiKey } from "@/lib/types";
+import { formatNumber } from "@/lib/format";
+import type { CreatedApiKey, UserLimits } from "@/lib/types";
 
 const DEFAULTS = { rpm: 60, daily_token_quota: 100_000 };
+const OPERATOR_MAX = { rpm: 100_000, daily_token_quota: 1_000_000_000 };
 
-export function CreateKeyDialog() {
+export function CreateKeyDialog({ limits, disabledReason }: { limits: UserLimits | null; disabledReason?: string }) {
+  const maxRpm = limits?.max_rpm ?? OPERATOR_MAX.rpm;
+  const maxTokens = limits?.max_daily_tokens ?? OPERATOR_MAX.daily_token_quota;
   const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +64,7 @@ export function CreateKeyDialog() {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger render={<Button size="sm" />}>
+      <DialogTrigger render={<Button size="sm" disabled={Boolean(disabledReason)} title={disabledReason} />}>
         <PlusIcon />
         New key
       </DialogTrigger>
@@ -99,7 +103,7 @@ export function CreateKeyDialog() {
               <div className="grid grid-cols-2 gap-3">
                 <Field>
                   <FieldLabel htmlFor="key-rpm">Requests / minute</FieldLabel>
-                  <Input id="key-rpm" name="rpm" type="number" min={1} max={100000} defaultValue={DEFAULTS.rpm} required />
+                  <Input id="key-rpm" name="rpm" type="number" min={1} max={maxRpm} defaultValue={Math.min(DEFAULTS.rpm, maxRpm)} required />
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="key-quota">Daily tokens</FieldLabel>
@@ -108,13 +112,18 @@ export function CreateKeyDialog() {
                     name="daily_token_quota"
                     type="number"
                     min={1}
-                    max={1000000000}
-                    defaultValue={DEFAULTS.daily_token_quota}
+                    max={maxTokens}
+                    defaultValue={Math.min(DEFAULTS.daily_token_quota, maxTokens)}
                     required
                   />
                 </Field>
               </div>
-              <FieldDescription>The token quota resets at midnight UTC.</FieldDescription>
+              <FieldDescription>
+                {limits
+                  ? `Up to ${formatNumber(limits.max_rpm)} requests/min and ${formatNumber(limits.max_daily_tokens)} tokens/day. `
+                  : ""}
+                The token quota resets at midnight UTC.
+              </FieldDescription>
               {error && <FieldError>{error}</FieldError>}
             </FieldGroup>
             <DialogFooter>

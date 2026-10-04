@@ -1,7 +1,10 @@
 import "server-only";
 
+import { auth } from "@clerk/nextjs/server";
+
 // Server-side gateway access for Server Components, Server Actions and Route Handlers.
-// ADMIN_TOKEN never leaves the server.
+// ADMIN_TOKEN never leaves the server. Admin calls are scoped to the signed-in Clerk user via
+// X-Tollgate-User; the gateway trusts that header only together with ADMIN_TOKEN.
 export const GATEWAY_URL = (process.env.GATEWAY_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const TIMEOUT_MS = 15_000;
@@ -17,12 +20,13 @@ export class GatewayRequestError extends Error {
   }
 }
 
-type FetchOptions = { method?: string; body?: unknown; admin?: boolean; timeoutMs?: number };
+type FetchOptions = { method?: string; body?: unknown; admin?: boolean; userId?: string; timeoutMs?: number };
 
 export async function gatewayFetch(path: string, options: FetchOptions = {}): Promise<Response> {
   const headers = new Headers();
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
   if (options.admin) headers.set("Authorization", `Bearer ${ADMIN_TOKEN}`);
+  if (options.userId) headers.set("X-Tollgate-User", options.userId);
 
   return fetch(`${GATEWAY_URL}${path}`, {
     method: options.method ?? "GET",
@@ -42,14 +46,16 @@ async function toError(res: Response): Promise<GatewayRequestError> {
   }
 }
 
-/** Typed call to the gateway's /admin API. Throws GatewayRequestError on any failure. */
-export async function admin<T>(path: string, options: Omit<FetchOptions, "admin"> = {}): Promise<T> {
+/** Typed call to the gateway's /admin API as the signed-in user. Throws GatewayRequestError on any failure. */
+export async function admin<T>(path: string, options: Omit<FetchOptions, "admin" | "userId"> = {}): Promise<T> {
   if (!ADMIN_TOKEN) {
     throw new GatewayRequestError(500, "misconfigured", "ADMIN_TOKEN is not set for the dashboard server.");
   }
+  const { userId, redirectToSignIn } = await auth();
+  if (!userId) return redirectToSignIn();
   let res: Response;
   try {
-    res = await gatewayFetch(`/admin${path}`, { ...options, admin: true });
+    res = await gatewayFetch(`/admin${path}`, { ...options, admin: true, userId });
   } catch (error) {
     const timedOut = error instanceof DOMException && error.name === "TimeoutError";
     console.error(`[gateway] ${options.method ?? "GET"} /admin${path} failed:`, error);

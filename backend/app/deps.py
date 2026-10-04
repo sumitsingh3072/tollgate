@@ -2,6 +2,8 @@
 
 import hmac
 import logging
+import re
+from dataclasses import dataclass
 
 from fastapi import Request
 
@@ -14,6 +16,19 @@ from app.errors import GatewayError
 log = logging.getLogger("tollgate.auth")
 
 _INVALID_KEY = "Invalid API key. Create one in the Tollgate dashboard."
+USER_HEADER = "x-tollgate-user"
+_VALID_USER_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+@dataclass(frozen=True)
+class AdminScope:
+    """Who an admin request acts for. owner_id=None is the operator (ADMIN_TOKEN only) view of everything."""
+
+    owner_id: str | None
+
+    @property
+    def is_operator(self) -> bool:
+        return self.owner_id is None
 
 
 def _bearer(request: Request) -> str:
@@ -28,6 +43,17 @@ async def require_admin(request: Request) -> None:
     expected = settings.admin_token.get_secret_value().encode()
     if not hmac.compare_digest(_bearer(request).encode(), expected):
         raise GatewayError(401, "authentication_error", "Invalid admin token.")
+
+
+async def admin_scope(request: Request) -> AdminScope:
+    """The dashboard forwards the signed-in Clerk user as X-Tollgate-User. It is trusted only because
+    the router already required ADMIN_TOKEN, which never leaves the dashboard's server."""
+    raw = request.headers.get(USER_HEADER)
+    if raw is None:
+        return AdminScope(owner_id=None)
+    if not _VALID_USER_ID.fullmatch(raw):
+        raise GatewayError(400, "invalid_request_error", "Malformed X-Tollgate-User header.")
+    return AdminScope(owner_id=raw)
 
 
 async def require_api_key(request: Request) -> KeyRecord:

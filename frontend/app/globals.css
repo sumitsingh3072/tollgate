@@ -132,6 +132,28 @@
   --sidebar-ring: oklch(0.64 0.16 277 / 60%);
 }
 
+/* Clerk components (sign-in, user menu) follow the same tokens in both themes. */
+:root {
+  --clerk-color-primary: var(--primary);
+  --clerk-color-primary-foreground: var(--primary-foreground);
+  --clerk-color-background: var(--card);
+  --clerk-color-foreground: var(--foreground);
+  --clerk-color-muted: var(--muted);
+  --clerk-color-muted-foreground: var(--muted-foreground);
+  --clerk-color-input: color-mix(in oklch, var(--foreground) 4%, var(--card));
+  --clerk-color-input-foreground: var(--foreground);
+  --clerk-color-border: var(--input);
+  --clerk-color-ring: var(--ring);
+  --clerk-color-danger: var(--destructive);
+  --clerk-color-success: var(--success);
+  --clerk-color-warning: var(--warning);
+  --clerk-color-neutral: var(--foreground);
+  --clerk-color-shadow: oklch(0 0 0 / 12%);
+  --clerk-color-modal-backdrop: oklch(0 0 0 / 50%);
+  --clerk-border-radius: var(--radius);
+  --clerk-font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     upstream_timeout: float = 60.0
     upstream_connect_timeout: float = 5.0
 
+    # Caps for self-serve (signed-in) users; the shared GEMINI_API_KEY pays for their traffic.
+    user_max_keys: int = 5
+    user_max_rpm: int = 120
+    user_max_daily_tokens: int = 500_000
+
     cache_ttl: int = 3600
     breaker_failure_threshold: int = 3
     breaker_open_seconds: float = 30.0

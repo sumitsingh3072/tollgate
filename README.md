@@ -9,7 +9,7 @@ circuit breaker, streaming passthrough, terse mode, and request analytics in a L
 ## Quickstart (Docker)
 
 ```bash
-cp .env.example .env        # set GEMINI_API_KEY, ADMIN_TOKEN, DATABASE_URL (Neon)
+cp .env.example .env        # set GEMINI_API_KEY, ADMIN_TOKEN, DATABASE_URL (Neon), Clerk keys
 docker compose up -d --build
 # no Neon? use local Postgres:
 #   DATABASE_URL=postgresql://tollgate:tollgate@postgres:5432/tollgate
@@ -17,7 +17,7 @@ docker compose up -d --build
 ```
 
 - Gateway: http://localhost:8000 (`/health`, `/docs`)
-- Dashboard: http://localhost:3000
+- Landing + dashboard: http://localhost:3000 (sign in with Clerk; the dashboard is at /dashboard)
 - Mock failing upstream: http://localhost:9000
 
 Port already taken? Override host ports, e.g. `REDIS_PORT=6380 docker compose up -d`.
