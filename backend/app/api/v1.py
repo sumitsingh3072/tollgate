@@ -88,7 +88,9 @@ async def _handle(
     async def complete(upstream: Upstream) -> dict[str, Any]:
         return await proxy.complete(state.http, body.model, upstream, proxy.build_payload(client_body, upstream))
 
-    result = await fallback.run_chain(body.model, alias.chain, state.breakers, complete)
+    result = await fallback.run_chain(
+        body.model, alias.chain, state.breakers, complete, state.settings.fallback_timeout or None
+    )
     used = usage.from_completion(result.value, prompt)
     record.status, record.model_used, record.fallback_used, record.usage = (
         200,
@@ -132,7 +134,9 @@ async def _stream(
         return await proxy.open_stream(state.http, record.alias, upstream, payload, hooks)
 
     # Fallback is possible until the first byte: open_stream checks the upstream status first.
-    streamed = await fallback.run_chain(record.alias, alias.chain, state.breakers, open_stream)
+    streamed = await fallback.run_chain(
+        record.alias, alias.chain, state.breakers, open_stream, state.settings.fallback_timeout or None
+    )
     record.model_used, record.fallback_used = streamed.upstream.model, streamed.fallback_used
     headers = {
         **SSE_HEADERS,

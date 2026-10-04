@@ -47,6 +47,8 @@ async def test_rpm_limit_isolated_per_key(
     assert statuses == [200, 200, 200, 429, 429]
     assert blocked.json()["error"]["type"] == "rate_limit"
     assert 1 <= int(blocked.headers["retry-after"]) <= 60
+    assert blocked.headers["x-ratelimit-limit-requests"] == "3"
+    assert blocked.headers["x-ratelimit-remaining-requests"] == "0"  # clamped, not negative
     assert (await chat(client, other)).status_code == 200  # second key unaffected
 
 
@@ -79,6 +81,8 @@ async def test_daily_quota_uses_total_tokens(
 
     assert blocked.status_code == 429
     assert blocked.json()["error"]["type"] == "quota_exceeded"
+    assert blocked.headers["x-ratelimit-limit-tokens"] == "100"
+    assert blocked.headers["x-ratelimit-remaining-tokens"] == "0"
     listed = (await client.get("/admin/keys", headers=ADMIN_HEADERS)).json()
     assert listed[0]["tokens_today"] == 120
 

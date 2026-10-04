@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     log_flush_interval: float = 2.0
     upstream_timeout: float = 120.0  # local models on CPU are slow, especially on first load
     upstream_connect_timeout: float = 5.0
+    # Max wait for a chain entry that has a fallback (streams: time to first byte). Gemini sends no
+    # headers until the first token, and gemma-4-31b-it can take 40s+ under load. 0 disables.
+    fallback_timeout: float = 30.0
 
     # Caps for self-serve (signed-in) users, who share the gateway's upstream capacity.
     user_max_keys: int = 5

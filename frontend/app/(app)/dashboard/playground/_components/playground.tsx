@@ -4,6 +4,7 @@ import { ArrowUpIcon, EraserIcon, FlaskConicalIcon, SquareIcon, TriangleAlertIco
 import Link from "next/link";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
+import { Markdown } from "@/components/markdown";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -67,11 +68,17 @@ function Message({ message, streaming }: { message: ChatMessage; streaming: bool
     <div className={cn("flex", isUser && "justify-end")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-3 py-2 whitespace-pre-wrap",
-          isUser ? "bg-primary text-primary-foreground" : "border bg-card",
+          "max-w-[85%] min-w-0 rounded-lg px-3 py-2",
+          isUser ? "bg-primary whitespace-pre-wrap text-primary-foreground" : "border bg-card",
         )}
       >
-        {message.content || (streaming && <span className="inline-block h-4 w-1.5 animate-pulse bg-muted-foreground align-middle" />)}
+        {!message.content ? (
+          streaming && <span className="inline-block h-4 w-1.5 animate-pulse bg-muted-foreground align-middle" />
+        ) : isUser ? (
+          message.content
+        ) : (
+          <Markdown>{message.content}</Markdown>
+        )}
       </div>
     </div>
   );
