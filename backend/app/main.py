@@ -17,6 +17,7 @@ from app.core import tasks
 from app.core.coalesce import Coalescer
 from app.core.fair_queue import FairQueue
 from app.core.fallback import CircuitBreakers
+from app.core.tags import TAGS_HEADER
 from app.db.session import create_engine, create_sessionmaker, init_db
 from app.deps import require_admin
 from app.errors import install_error_handlers
@@ -134,7 +135,8 @@ def create_app(settings: Settings | None = None, *, use_lifespan: bool = True) -
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+        # Every request header a browser client may send; anything else fails the CORS preflight.
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id", TAGS_HEADER],
         expose_headers=TOLLGATE_HEADERS,
     )
     app.add_middleware(RequestContextMiddleware)

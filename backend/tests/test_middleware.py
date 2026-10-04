@@ -42,3 +42,19 @@ async def test_unhandled_error_is_masked(make_app) -> None:
     body = resp.json()["error"]
     assert body["type"] == "server_error"
     assert "secret detail" not in body["message"]
+
+
+async def test_cors_preflight_allows_browser_client_headers(make_client) -> None:
+    """A browser app sending cost tags must pass the preflight (default origin: the dashboard)."""
+    async with make_client() as client:
+        resp = await client.options(
+            "/v1/chat/completions",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type,x-tollgate-tags",
+            },
+        )
+    assert resp.status_code == 200
+    allowed = resp.headers["access-control-allow-headers"].lower()
+    assert "x-tollgate-tags" in allowed
