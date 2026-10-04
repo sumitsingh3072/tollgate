@@ -316,6 +316,7 @@ cd ../frontend && cp .env.example .env.local && pnpm install && pnpm dev
 pnpm lint && pnpm build
 ```
 
+A plain-language handoff with flow diagrams: [docs/handoff/Tollgate-Handoff.pdf](docs/handoff/Tollgate-Handoff.pdf).
 Project layout and design notes: [docs/architecture.md](docs/architecture.md) ·
 [docs/plan.md](docs/plan.md) · [docs/phase.md](docs/phase.md) · [CLAUDE.md](CLAUDE.md).
 

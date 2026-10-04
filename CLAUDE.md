@@ -23,6 +23,8 @@ cd backend && .venv/bin/python -m scripts.seed_demo --database-url <local-db-url
 cd frontend && cp .env.example .env.local && pnpm dev   # :3000 (Clerk keys optional: none = local mode)
 cd backend && .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 cd frontend && pnpm lint && pnpm build
+python3 docs/handoff/build_handoff.py                # regenerate the handoff PDF (needs Chrome)
+cd backend && .venv/bin/python -m bench.coalesce_bench   # benchmarks: see docs/benchmarks.md
 ```
 Config (.env.example): GEMINI_API_KEY is the only required value. UPSTREAM_PROVIDER=ollama, DATABASE_URL
 and Clerk keys switch models / database / accounts independently.
