@@ -1,10 +1,13 @@
 """OpenAI-compatible data plane: /v1/chat/completions, /v1/models."""
 
+from collections.abc import AsyncIterator
+from typing import Any
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.config import Alias
-from app.core import limits, proxy, tasks, usage
+from app.config import Alias, Upstream
+from app.core import cache, fallback, limits, proxy, tasks, terse, usage
 from app.core.keys import KeyRecord
 from app.deps import require_api_key
 from app.errors import GatewayError
@@ -28,34 +31,68 @@ def _resolve_alias(request: Request, name: str) -> Alias:
     return alias
 
 
+def _tollgate_headers(model: str, cache_status: str, fallback_used: bool) -> dict[str, str]:
+    return {
+        "x-tollgate-model": model,
+        "x-tollgate-cache": cache_status,
+        "x-tollgate-fallback": "true" if fallback_used else "false",
+    }
+
+
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
     body: ChatCompletionRequest, request: Request, key: KeyRecord = Depends(require_api_key)
 ) -> JSONResponse | StreamingResponse:
-    redis = request.app.state.redis
-    limit = await limits.check(redis, key)
+    state = request.app.state
+    limit = await limits.check(state.redis, key)
     alias = _resolve_alias(request, body.model)
-    upstream = alias.chain[0]  # Phase 3 walks the full chain with fallback.
-    payload = proxy.build_payload(body.upstream_body(), upstream)
-    prompt = usage.prompt_text(payload["messages"])
-    http = request.app.state.http
+
+    client_body = body.upstream_body()
+    if alias.terse:
+        client_body["messages"] = terse.apply(client_body["messages"])
+    prompt = usage.prompt_text(client_body["messages"])
 
     if body.stream:
         tracker = usage.SSEUsageTracker(prompt)
 
         def on_close() -> None:
             tokens = tracker.result().total_tokens
-            tasks.spawn(limits.record_tokens(redis, key.id, tokens), name="record-tokens")
+            tasks.spawn(limits.record_tokens(state.redis, key.id, tokens), name="record-tokens")
 
-        chunks = await proxy.open_stream(
-            http, body.model, upstream, payload, proxy.StreamHooks(on_chunk=tracker.feed, on_close=on_close)
-        )
-        return StreamingResponse(chunks, media_type="text/event-stream", headers={**SSE_HEADERS, **limit.headers()})
+        hooks = proxy.StreamHooks(on_chunk=tracker.feed, on_close=on_close)
 
-    data = await proxy.complete(http, body.model, upstream, payload)
-    await limits.record_tokens(redis, key.id, usage.from_completion(data, prompt).total_tokens)
+        async def open_stream(upstream: Upstream) -> AsyncIterator[bytes]:
+            payload = proxy.build_payload(client_body, upstream)
+            return await proxy.open_stream(state.http, body.model, upstream, payload, hooks)
+
+        # Fallback is possible until the first byte: open_stream checks the upstream status first.
+        streamed = await fallback.run_chain(body.model, alias.chain, state.breakers, open_stream)
+        headers = {
+            **SSE_HEADERS,
+            **limit.headers(),
+            **_tollgate_headers(streamed.upstream.model, "bypass", streamed.fallback_used),
+        }
+        return StreamingResponse(streamed.value, media_type="text/event-stream", headers=headers)
+
+    key_for_cache = cache.cache_key(client_body) if cache.is_cacheable(client_body) else None
+    if key_for_cache and (hit := await cache.get(state.redis, key_for_cache)):
+        # Hits cost no upstream tokens, so they don't count against the daily quota.
+        return JSONResponse(hit.body, headers={**limit.headers(), **_tollgate_headers(hit.model, "hit", False)})
+
+    async def complete(upstream: Upstream) -> dict[str, Any]:
+        return await proxy.complete(state.http, body.model, upstream, proxy.build_payload(client_body, upstream))
+
+    result = await fallback.run_chain(body.model, alias.chain, state.breakers, complete)
+    await limits.record_tokens(state.redis, key.id, usage.from_completion(result.value, prompt).total_tokens)
+    if key_for_cache:
+        await cache.put(state.redis, key_for_cache, result.upstream.model, result.value, state.settings.cache_ttl)
+
+    headers = {
+        **limit.headers(),
+        **_tollgate_headers(result.upstream.model, "miss" if key_for_cache else "bypass", result.fallback_used),
+    }
     # Upstream JSON is already OpenAI-shaped; skip FastAPI's re-encoding pass.
-    return JSONResponse(data, headers=limit.headers())
+    return JSONResponse(result.value, headers=headers)
 
 
 @router.get("/models")

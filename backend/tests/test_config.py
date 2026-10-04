@@ -8,7 +8,7 @@ def test_normalize_neon_url() -> None:
 
 def test_aliases_use_gemini_models(settings: Settings) -> None:
     aliases = build_aliases(settings)
-    assert set(aliases) == {"fast", "smart", "smart-terse"}
+    assert set(aliases) == {"fast", "smart", "smart-terse", "demo-failover"}
     assert [u.model for u in aliases["smart"].chain] == [settings.gemini_smart_model, settings.gemini_fast_model]
     assert aliases["smart-terse"].terse and not aliases["smart"].terse
     assert all(u.base_url == settings.gemini_base_url and u.api_key == "test-key" for u in aliases["smart"].chain)

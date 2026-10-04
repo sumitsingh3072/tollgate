@@ -50,9 +50,10 @@ flowchart LR
    unavailable -> 503 service_unavailable.
 3. Resolve alias -> chain of upstreams; terse aliases prepend the terse system
    prompt.
-4. Cache (only temperature==0 and stream false): key = sha256 of
-   (alias, messages, temperature, max_tokens). Hit -> return, header
-   x-tollgate-cache: hit.
+4. Cache (only temperature==0 and stream false): key = sha256 of the canonical
+   request body (alias, messages, temperature, max_tokens, tools, ...; stream and
+   user ignored). Hit -> return in a few ms, header x-tollgate-cache: hit. Hits
+   still count toward RPM but not the token quota.
 5. Forward: try each upstream in order (POST {base_url}/chat/completions with
    Authorization: Bearer {upstream.api_key}, model rewritten to the upstream id,
    upstream.default_params deep-merged under the client body; for Gemma this
@@ -60,7 +61,11 @@ flowchart LR
    Authorization header is never forwarded. Streams check the upstream status
    before sending headers, so failures return a normal JSON error., skipping any with an open circuit
    breaker. On connect error, timeout, or 5xx -> record failure, try next.
-   Breaker: 3 consecutive failures -> open for 30s.
+   Upstream 429 also falls back (separate per-model quota); other 4xx return
+   immediately. Breaker: 3 consecutive failures -> open for 30s, then one
+   half-open trial. Breakers are in-process (app.state.breakers). If every
+   upstream is open, all are tried anyway. Streams can fall back until the first
+   byte because the upstream status is checked before headers are sent.
 6. Stream: relay SSE chunks unchanged via StreamingResponse. Request
    stream_options include_usage when supported; otherwise estimate tokens.
 7. After: INCRBY usage.total_tokens (Gemma counts thinking tokens only in the total;

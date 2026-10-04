@@ -77,7 +77,7 @@ def _request(http: httpx.AsyncClient, upstream: Upstream, payload: dict[str, Any
         "POST",
         f"{upstream.base_url}{CHAT_PATH}",
         json=payload,
-        headers={"Authorization": f"Bearer {upstream.api_key}"},
+        headers={"Authorization": f"Bearer {upstream.api_key}"} if upstream.api_key else None,
     )
 
 

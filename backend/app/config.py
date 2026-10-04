@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     upstream_timeout: float = 60.0
     upstream_connect_timeout: float = 5.0
 
+    cache_ttl: int = 3600
+    breaker_failure_threshold: int = 3
+    breaker_open_seconds: float = 30.0
+
     @field_validator("database_url")
     @classmethod
     def _asyncpg_url(cls, v: str) -> str:
@@ -111,10 +115,13 @@ def build_aliases(settings: Settings) -> dict[str, Alias]:
     fast = Upstream(settings.gemini_fast_model, settings.gemini_base_url, key, params)
     smart = Upstream(settings.gemini_smart_model, settings.gemini_base_url, key, params)
     smart_chain = (smart, fast)
+    # Always-500 upstream first, so failover can be demoed on demand.
+    mock = Upstream("mock-500", settings.mock_upstream_url)
     return {
         "fast": Alias(chain=(fast,)),
         "smart": Alias(chain=smart_chain),
         "smart-terse": Alias(chain=smart_chain, terse=True),
+        "demo-failover": Alias(chain=(mock, fast)),
     }
 
 
